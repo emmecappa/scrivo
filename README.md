@@ -227,16 +227,24 @@ Vedi tutti i workspace di cui fai parte:
 
 ---
 
-## 🤝 Collaborazione
+## 🤝 Collaborazione in Team
 
-### Invitare membri
-1. Clicca sull'icona **👥** nella top bar
-2. Inserisci l'email della persona
-3. Seleziona il ruolo (Editor o Visualizzatore)
-4. Clicca "Invia invito"
+### Creare e Condividere Workspace
+1. Crea un workspace (diventi automaticamente **Proprietario**)
+2. Clicca sull'icona **👥** nella top bar
+3. Inserisci l'email del collega
+4. Seleziona il ruolo (Editor o Visualizzatore)
+5. Clicca "Invia invito"
+
+### Accettare un Invito
+Quando vieni invitato in un workspace:
+1. Vedi un banner blu **"Inviti in attesa"** in alto
+2. Leggi il nome del workspace e il ruolo assegnato
+3. Clicca **"✓ Accetto"** per entrare nel team
+4. Il workspace appare nel selettore workspace
 
 ### Ruoli
-- **👑 Proprietario**: Controllo completo del workspace
+- **👑 Proprietario**: Controllo completo (crea, invita, rimuovi, elimina)
 - **✏️ Editor**: Può creare e modificare pagine
 - **👁️ Visualizzatore**: Può solo vedere le pagine
 
@@ -245,7 +253,7 @@ Vedi tutti i workspace di cui fai parte:
 - Indicatori di chi sta guardando la stessa pagina
 - Aggiornamento ogni 30 secondi
 
-📖 **Guida completa**: Vedi [COLLABORATION.md](./COLLABORATION.md)
+📖 **Guida completa**: Vedi [TEAM_COLLABORATION.md](./TEAM_COLLABORATION.md)
 
 ## 🔒 Sicurezza
 

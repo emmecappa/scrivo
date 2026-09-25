@@ -101,6 +101,7 @@ interface AppState {
   workspaces: Workspace[];
   workspace: Workspace | null;
   workspaceLoading: boolean;
+  pendingInvites: any[];
   
   // Members
   members: WorkspaceMember[];
@@ -140,7 +141,8 @@ interface AppState {
   inviteMember: (email: string, role: 'editor' | 'viewer') => Promise<void>;
   updateMemberRole: (memberId: string, role: 'owner' | 'editor' | 'viewer') => Promise<void>;
   removeMember: (memberId: string) => Promise<void>;
-  acceptInvitation: (memberId: string) => Promise<void>;
+  acceptInvitation: (inviteId: string) => Promise<void>;
+  declineInvitation: (inviteId: string) => Promise<void>;
   
   // Active users (presence)
   subscribeToActiveUsers: () => void;
@@ -182,6 +184,7 @@ export const useStore = create<AppState>((set, get) => ({
   workspaces: [],
   workspace: null,
   workspaceLoading: false,
+  pendingInvites: [],
   members: [],
   activeUsers: [],
   pages: [],
@@ -349,7 +352,7 @@ export const useStore = create<AppState>((set, get) => ({
     set({ workspaceLoading: true });
     
     try {
-      console.log('📂 Loading all workspaces for user:', user.id);
+      console.log('📂 Loading all workspaces for user:', user.id, user.email);
       
       // Carica workspace creati dall'utente
       const createdQuery = query(
@@ -357,25 +360,35 @@ export const useStore = create<AppState>((set, get) => ({
         where('created_by', '==', user.id)
       );
       
-      // Carica workspace di cui l'utente è membro
-      const memberQuery = query(
+      // Carica workspace di cui l'utente è membro attivo
+      const activeMemberQuery = query(
         collection(db, 'workspace_members'),
         where('user_id', '==', user.id),
         where('status', '==', 'active')
       );
       
-      const [createdSnapshot, memberSnapshot] = await Promise.all([
+      // Carica inviti in attesa per email
+      const pendingInvitesQuery = query(
+        collection(db, 'workspace_members'),
+        where('email', '==', user.email),
+        where('status', '==', 'invited')
+      );
+      
+      const [createdSnapshot, activeMemberSnapshot, pendingInvitesSnapshot] = await Promise.all([
         getDocs(createdQuery),
-        getDocs(memberQuery)
+        getDocs(activeMemberQuery),
+        getDocs(pendingInvitesQuery)
       ]);
       
       console.log('📊 Workspaces found:', { 
         created: createdSnapshot.size,
-        member: memberSnapshot.size
+        activeMember: activeMemberSnapshot.size,
+        pendingInvites: pendingInvitesSnapshot.size
       });
       
       // Combina tutti i workspace
       const workspacesMap = new Map<string, Workspace>();
+      const pendingInvitesList: any[] = [];
       
       // Aggiungi workspace creati
       createdSnapshot.docs.forEach(docSnap => {
@@ -389,8 +402,8 @@ export const useStore = create<AppState>((set, get) => ({
         });
       });
       
-      // Aggiungi workspace di cui è membro
-      for (const memberDoc of memberSnapshot.docs) {
+      // Aggiungi workspace di cui è membro attivo
+      for (const memberDoc of activeMemberSnapshot.docs) {
         const memberData = memberDoc.data();
         const workspaceId = memberData.workspace_id;
         
@@ -409,10 +422,30 @@ export const useStore = create<AppState>((set, get) => ({
         }
       }
       
+      // Raccogli inviti in attesa
+      for (const inviteDoc of pendingInvitesSnapshot.docs) {
+        const inviteData = inviteDoc.data();
+        const workspaceDoc = await getDoc(doc(db, 'workspaces', inviteData.workspace_id));
+        
+        if (workspaceDoc.exists()) {
+          const wsData = workspaceDoc.data();
+          pendingInvitesList.push({
+            id: inviteDoc.id,
+            workspace_id: inviteData.workspace_id,
+            workspace_name: wsData.name || '',
+            workspace_icon: wsData.icon || '📝',
+            invited_by: inviteData.invited_by || '',
+            role: inviteData.role || 'viewer',
+            invited_at: timestampToString(inviteData.invited_at),
+          });
+        }
+      }
+      
       const workspaces = Array.from(workspacesMap.values());
       console.log('✅ Total workspaces loaded:', workspaces.length);
+      console.log('📧 Pending invites:', pendingInvitesList.length);
       
-      set({ workspaces, workspaceLoading: false });
+      set({ workspaces, pendingInvites: pendingInvitesList, workspaceLoading: false });
       
       // Seleziona automaticamente il workspace salvato o il primo
       const savedWorkspaceId = localStorage.getItem(`lastWorkspace_${user.id}`);
@@ -693,6 +726,7 @@ export const useStore = create<AppState>((set, get) => ({
         full_name: '',
         role,
         status: 'invited',
+        invited_by: user.id,
         invited_at: serverTimestamp(),
         joined_at: null,
       });
@@ -746,21 +780,54 @@ export const useStore = create<AppState>((set, get) => ({
     }
   },
 
-  acceptInvitation: async (memberId) => {
-    const { user } = get();
+  acceptInvitation: async (inviteId) => {
+    const { user, pendingInvites } = get();
     if (!user || !isFirebaseConfigured || !db) return;
     
     try {
-      const memberRef = doc(db, 'workspace_members', memberId);
+      console.log('✅ Accepting invitation:', inviteId);
+      
+      const memberRef = doc(db, 'workspace_members', inviteId);
       await updateDoc(memberRef, {
         user_id: user.id,
         full_name: user.full_name,
         status: 'active',
         joined_at: serverTimestamp(),
       });
-      console.log('✅ Invitation accepted');
+      
+      // Rimuovi l'invito dalla lista dei pending
+      set({
+        pendingInvites: pendingInvites.filter(inv => inv.id !== inviteId)
+      });
+      
+      console.log('✅ Invitation accepted, reloading workspaces...');
+      
+      // Ricarica i workspace per includere il nuovo workspace
+      await get().loadWorkspaces();
     } catch (err: any) {
       console.error('❌ Accept invitation error:', err);
+      throw err;
+    }
+  },
+  
+  declineInvitation: async (inviteId) => {
+    const { pendingInvites } = get();
+    if (!isFirebaseConfigured || !db) return;
+    
+    try {
+      console.log('❌ Declining invitation:', inviteId);
+      
+      const memberRef = doc(db, 'workspace_members', inviteId);
+      await deleteDoc(memberRef);
+      
+      // Rimuovi l'invito dalla lista dei pending
+      set({
+        pendingInvites: pendingInvites.filter(inv => inv.id !== inviteId)
+      });
+      
+      console.log('✅ Invitation declined');
+    } catch (err: any) {
+      console.error('❌ Decline invitation error:', err);
       throw err;
     }
   },
