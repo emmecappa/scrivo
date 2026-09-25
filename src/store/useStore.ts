@@ -98,6 +98,7 @@ interface AppState {
   authError: string | null;
   
   // Workspace
+  workspaces: Workspace[];
   workspace: Workspace | null;
   workspaceLoading: boolean;
   
@@ -128,8 +129,11 @@ interface AppState {
   logout: () => Promise<void>;
   checkAuth: () => Promise<void>;
   
-  loadWorkspace: () => Promise<void>;
+  loadWorkspaces: () => Promise<void>;
+  selectWorkspace: (workspaceId: string) => Promise<void>;
   createWorkspace: (name: string) => Promise<void>;
+  updateWorkspace: (id: string, updates: Partial<Workspace>) => Promise<void>;
+  deleteWorkspace: (id: string) => Promise<void>;
   
   // Members
   loadMembers: () => Promise<void>;
@@ -175,6 +179,7 @@ export const useStore = create<AppState>((set, get) => ({
   isAuthenticated: false,
   isLoading: true,
   authError: null,
+  workspaces: [],
   workspace: null,
   workspaceLoading: false,
   members: [],
@@ -209,7 +214,7 @@ export const useStore = create<AppState>((set, get) => ({
         workspaceLoading: true,
       });
       
-      await get().loadWorkspace();
+      await get().loadWorkspaces();
     } catch (err: any) {
       console.error('Login error:', err);
       throw new Error(err.message || 'Errore di login');
@@ -249,7 +254,7 @@ export const useStore = create<AppState>((set, get) => ({
         workspaceLoading: true,
       });
       
-      await get().loadWorkspace();
+      await get().loadWorkspaces();
     } catch (err: any) {
       console.error('Signup error:', err);
       throw new Error(err.message || 'Errore di registrazione');
@@ -322,7 +327,7 @@ export const useStore = create<AppState>((set, get) => ({
           await new Promise(r => setTimeout(r, 100));
           
           console.log('📂 Caricamento workspace...');
-          await get().loadWorkspace();
+          await get().loadWorkspaces();
         } else {
           console.log('❌ Nessun utente autenticato');
           set({ isLoading: false });
@@ -334,63 +339,236 @@ export const useStore = create<AppState>((set, get) => ({
     });
   },
 
-  loadWorkspace: async () => {
+  loadWorkspaces: async () => {
     const { user } = get();
     if (!user || !isFirebaseConfigured || !db) {
-      console.log('⚠️ Load workspace: skipped -', { hasUser: !!user, isConfigured: isFirebaseConfigured, hasDb: !!db });
+      console.log('⚠️ Load workspaces: skipped');
       return;
     }
     
     set({ workspaceLoading: true });
     
     try {
-      console.log('📂 Loading workspace for user:', user.id, user.email);
+      console.log('📂 Loading all workspaces for user:', user.id);
       
-      const q = query(
+      // Carica workspace creati dall'utente
+      const createdQuery = query(
         collection(db, 'workspaces'),
         where('created_by', '==', user.id)
       );
       
-      const snapshot = await getDocs(q);
-      console.log('📊 Workspace query result:', { 
-        empty: snapshot.empty, 
-        size: snapshot.size,
+      // Carica workspace di cui l'utente è membro
+      const memberQuery = query(
+        collection(db, 'workspace_members'),
+        where('user_id', '==', user.id),
+        where('status', '==', 'active')
+      );
+      
+      const [createdSnapshot, memberSnapshot] = await Promise.all([
+        getDocs(createdQuery),
+        getDocs(memberQuery)
+      ]);
+      
+      console.log('📊 Workspaces found:', { 
+        created: createdSnapshot.size,
+        member: memberSnapshot.size
       });
       
-      if (!snapshot.empty) {
-        const docSnap = snapshot.docs[0];
+      // Combina tutti i workspace
+      const workspacesMap = new Map<string, Workspace>();
+      
+      // Aggiungi workspace creati
+      createdSnapshot.docs.forEach(docSnap => {
         const data = docSnap.data();
-        
-        console.log('✅ Workspace found:', docSnap.id, data);
-        
-        set({
-          workspace: {
-            id: docSnap.id,
-            name: data.name || '',
-            icon: data.icon || '📝',
-            created_by: data.created_by || user.id,
-            created_at: timestampToString(data.created_at),
-          },
-          workspaceLoading: false
+        workspacesMap.set(docSnap.id, {
+          id: docSnap.id,
+          name: data.name || '',
+          icon: data.icon || '📝',
+          created_by: data.created_by || user.id,
+          created_at: timestampToString(data.created_at),
         });
+      });
+      
+      // Aggiungi workspace di cui è membro
+      for (const memberDoc of memberSnapshot.docs) {
+        const memberData = memberDoc.data();
+        const workspaceId = memberData.workspace_id;
         
-        console.log('📄 Caricamento pagine...');
-        await get().loadPages();
-        
-        // Carica membri e subscribi al realtime
-        await get().loadMembers();
-        get().subscribeToActiveUsers();
-      } else {
-        console.log('⚠️ No workspace found for user - showing workspace creation screen');
-        set({ workspaceLoading: false });
+        if (!workspacesMap.has(workspaceId)) {
+          const workspaceDoc = await getDoc(doc(db, 'workspaces', workspaceId));
+          if (workspaceDoc.exists()) {
+            const data = workspaceDoc.data();
+            workspacesMap.set(workspaceId, {
+              id: workspaceId,
+              name: data.name || '',
+              icon: data.icon || '📝',
+              created_by: data.created_by || '',
+              created_at: timestampToString(data.created_at),
+            });
+          }
+        }
       }
+      
+      const workspaces = Array.from(workspacesMap.values());
+      console.log('✅ Total workspaces loaded:', workspaces.length);
+      
+      set({ workspaces, workspaceLoading: false });
+      
+      // Seleziona automaticamente il workspace salvato o il primo
+      const savedWorkspaceId = localStorage.getItem(`lastWorkspace_${user.id}`);
+      const workspaceToSelect = savedWorkspaceId && workspacesMap.has(savedWorkspaceId)
+        ? savedWorkspaceId
+        : workspaces.length > 0 ? workspaces[0].id : null;
+      
+      if (workspaceToSelect) {
+        await get().selectWorkspace(workspaceToSelect);
+      }
+      
     } catch (err: any) {
-      console.error('❌ Load workspace error:', err);
+      console.error('❌ Load workspaces error:', err);
       set({ workspaceLoading: false });
       
       if (err.code === 'permission-denied') {
         console.error('🚫 ERRORE PERMESSI: Aggiorna le regole di sicurezza Firestore!');
       }
+    }
+  },
+  
+  selectWorkspace: async (workspaceId) => {
+    const { user } = get();
+    if (!user || !isFirebaseConfigured || !db) return;
+    
+    try {
+      console.log('🔄 Selecting workspace:', workspaceId);
+      
+      const workspaceDoc = await getDoc(doc(db, 'workspaces', workspaceId));
+      
+      if (!workspaceDoc.exists()) {
+        console.error('❌ Workspace not found');
+        return;
+      }
+      
+      const data = workspaceDoc.data();
+      const workspace: Workspace = {
+        id: workspaceDoc.id,
+        name: data.name || '',
+        icon: data.icon || '📝',
+        created_by: data.created_by || '',
+        created_at: timestampToString(data.created_at),
+      };
+      
+      // Salva la selezione
+      localStorage.setItem(`lastWorkspace_${user.id}`, workspaceId);
+      
+      set({ workspace, workspaceLoading: false });
+      
+      console.log('✅ Workspace selected:', workspace.name);
+      
+      // Carica pagine, membri e presenza
+      await get().loadPages();
+      await get().loadMembers();
+      get().subscribeToActiveUsers();
+      
+    } catch (err: any) {
+      console.error('❌ Select workspace error:', err);
+    }
+  },
+  
+  updateWorkspace: async (id, updates) => {
+    if (!isFirebaseConfigured || !db) return;
+    
+    try {
+      const workspaceRef = doc(db, 'workspaces', id);
+      await updateDoc(workspaceRef, {
+        ...updates,
+        updated_at: serverTimestamp(),
+      });
+      
+      // Aggiorna lo stato locale
+      set({
+        workspaces: get().workspaces.map(w => 
+          w.id === id ? { ...w, ...updates } : w
+        ),
+        workspace: get().workspace?.id === id 
+          ? { ...get().workspace!, ...updates }
+          : get().workspace
+      });
+      
+      console.log('✅ Workspace updated');
+    } catch (err: any) {
+      console.error('❌ Update workspace error:', err);
+      throw err;
+    }
+  },
+  
+  deleteWorkspace: async (id) => {
+    const { user, workspaces } = get();
+    if (!user || !isFirebaseConfigured || !db) return;
+    
+    try {
+      // Verifica che l'utente sia il proprietario
+      const workspace = workspaces.find(w => w.id === id);
+      if (!workspace || workspace.created_by !== user.id) {
+        throw new Error('Solo il proprietario può eliminare il workspace');
+      }
+      
+      // Elimina il workspace
+      await deleteDoc(doc(db, 'workspaces', id));
+      
+      // Elimina tutti i membri
+      const membersQuery = query(
+        collection(db, 'workspace_members'),
+        where('workspace_id', '==', id)
+      );
+      const membersSnapshot = await getDocs(membersQuery);
+      const batch = writeBatch(db);
+      membersSnapshot.docs.forEach(docSnap => {
+        batch.delete(docSnap.ref);
+      });
+      await batch.commit();
+      
+      // Elimina tutte le pagine e i blocchi
+      const pagesQuery = query(
+        collection(db, 'pages'),
+        where('workspace_id', '==', id)
+      );
+      const pagesSnapshot = await getDocs(pagesQuery);
+      const pagesBatch = writeBatch(db);
+      
+      for (const pageDoc of pagesSnapshot.docs) {
+        // Elimina blocchi della pagina
+        const blocksQuery = query(
+          collection(db, 'blocks'),
+          where('page_id', '==', pageDoc.id)
+        );
+        const blocksSnapshot = await getDocs(blocksQuery);
+        blocksSnapshot.docs.forEach(blockDoc => {
+          pagesBatch.delete(blockDoc.ref);
+        });
+        
+        // Elimina la pagina
+        pagesBatch.delete(pageDoc.ref);
+      }
+      
+      await pagesBatch.commit();
+      
+      // Rimuovi dalla lista
+      const newWorkspaces = workspaces.filter(w => w.id !== id);
+      set({ workspaces: newWorkspaces });
+      
+      // Se era il workspace corrente, seleziona il primo disponibile
+      if (get().workspace?.id === id) {
+        if (newWorkspaces.length > 0) {
+          await get().selectWorkspace(newWorkspaces[0].id);
+        } else {
+          set({ workspace: null, pages: [], members: [], activeUsers: [] });
+        }
+      }
+      
+      console.log('✅ Workspace deleted');
+    } catch (err: any) {
+      console.error('❌ Delete workspace error:', err);
+      throw err;
     }
   },
 

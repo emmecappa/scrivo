@@ -96,6 +96,7 @@ VITE_FIREBASE_APP_ID=1:123456789:web:abcdef
 
 ### ✅ Fase 1 (Questa versione)
 - [x] Autenticazione email/password
+- [x] **Multi-workspace** (crea, gestisci e seleziona workspace)
 - [x] Creazione workspace
 - [x] **Collaborazione in tempo reale**
 - [x] **Invito membri via email**
@@ -195,6 +196,36 @@ active_users (collection)
 │   ├── last_seen: timestamp
 │   └── color: string
 ```
+
+## 🏢 Multi-Workspace
+
+### Creare un nuovo workspace
+1. Clicca sul nome del workspace nella sidebar (in alto)
+2. Clicca **"Crea nuovo workspace"**
+3. Inserisci il nome del workspace
+4. Clicca "Crea"
+
+### Selezionare un workspace
+1. Clicca sul nome del workspace nella sidebar
+2. Seleziona il workspace dalla lista
+3. Il workspace viene caricato automaticamente
+4. La selezione viene ricordata (localStorage)
+
+### Gestire un workspace
+1. Clicca sul nome del workspace nella sidebar
+2. Clicca **"Impostazioni workspace"**
+3. Puoi:
+   - Cambiare l'icona del workspace
+   - Rinominare il workspace
+   - Eliminare il workspace (solo proprietario)
+
+### Workspace disponibili
+Vedi tutti i workspace di cui fai parte:
+- ✅ Workspace che hai creato
+- ✅ Workspace in cui sei stato invitato
+- ✅ Passa da uno all'altro con un click
+
+---
 
 ## 🤝 Collaborazione
 
