@@ -1,5 +1,29 @@
 import { create } from 'zustand';
-import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { auth, db, isFirebaseConfigured } from '../lib/firebase';
+import {
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  signOut,
+  onAuthStateChanged,
+  updateProfile,
+  User as FirebaseUser,
+} from 'firebase/auth';
+import {
+  collection,
+  doc,
+  getDocs,
+  getDoc,
+  addDoc,
+  updateDoc,
+  deleteDoc,
+  query,
+  where,
+  orderBy,
+  serverTimestamp,
+  Timestamp,
+  onSnapshot,
+  writeBatch,
+} from 'firebase/firestore';
 import { v4 as uuidv4 } from 'uuid';
 
 export interface User {
@@ -35,7 +59,7 @@ export interface Page {
 export interface Block {
   id: string;
   page_id: string;
-  type: 'paragraph' | 'heading1' | 'heading2' | 'heading3' | 'bullet_list' | 'ordered_list' | 'task_list' | 'code' | 'quote' | 'divider' | 'image' | 'callout';
+  type: string;
   content: any;
   position: number;
   parent_id: string | null;
@@ -88,8 +112,16 @@ interface AppState {
   toggleSidebar: () => void;
 }
 
+// Helper per convertire Timestamp Firestore in stringa ISO
+const timestampToString = (ts: any): string => {
+  if (!ts) return new Date().toISOString();
+  if (ts instanceof Timestamp) return ts.toDate().toISOString();
+  if (typeof ts === 'string') return ts;
+  return new Date().toISOString();
+};
+
 export const useStore = create<AppState>((set, get) => ({
-  isConfigured: isSupabaseConfigured,
+  isConfigured: isFirebaseConfigured,
   user: null,
   isAuthenticated: false,
   isLoading: true,
@@ -103,105 +135,129 @@ export const useStore = create<AppState>((set, get) => ({
   isCreatingPage: false,
 
   login: async (email, password) => {
-    if (!isSupabaseConfigured) {
-      throw new Error('Supabase non configurato. Aggiungi le variabili VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY');
+    if (!isFirebaseConfigured || !auth) {
+      throw new Error('Firebase non configurato. Aggiungi le variabili VITE_FIREBASE_*');
     }
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) throw error;
-    if (data.user) {
+    try {
+      const userCredential = await signInWithEmailAndPassword(auth, email, password);
+      const fbUser = userCredential.user;
+      
       set({
         user: {
-          id: data.user.id,
-          email: data.user.email || '',
-          full_name: data.user.user_metadata?.full_name || '',
-          avatar_url: data.user.user_metadata?.avatar_url || '',
+          id: fbUser.uid,
+          email: fbUser.email || '',
+          full_name: fbUser.displayName || '',
+          avatar_url: fbUser.photoURL || '',
         },
         isAuthenticated: true,
         authError: null,
       });
+      
       await get().loadWorkspace();
+    } catch (err: any) {
+      console.error('Login error:', err);
+      throw new Error(err.message || 'Errore di login');
     }
   },
 
   signup: async (email, password, fullName) => {
-    if (!isSupabaseConfigured) {
-      throw new Error('Supabase non configurato. Aggiungi le variabili VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY');
+    if (!isFirebaseConfigured || !auth) {
+      throw new Error('Firebase non configurato. Aggiungi le variabili VITE_FIREBASE_*');
     }
-    const { data, error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: { data: { full_name: fullName } },
-    });
-    if (error) throw error;
-    if (data.user) {
+    try {
+      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+      const fbUser = userCredential.user;
+      
+      // Aggiorna il displayName
+      if (fbUser) {
+        await updateProfile(fbUser, { displayName: fullName });
+      }
+      
       set({
         user: {
-          id: data.user.id,
-          email: data.user.email || '',
+          id: fbUser.uid,
+          email: fbUser.email || '',
           full_name: fullName,
           avatar_url: '',
         },
         isAuthenticated: true,
         authError: null,
       });
+    } catch (err: any) {
+      console.error('Signup error:', err);
+      throw new Error(err.message || 'Errore di registrazione');
     }
   },
 
   logout: async () => {
-    if (isSupabaseConfigured) {
-      await supabase.auth.signOut();
+    if (isFirebaseConfigured && auth) {
+      await signOut(auth);
     }
-    set({ user: null, isAuthenticated: false, workspace: null, pages: [], currentPageId: null, blocks: [] });
+    set({ 
+      user: null, 
+      isAuthenticated: false, 
+      workspace: null, 
+      pages: [], 
+      currentPageId: null, 
+      blocks: [] 
+    });
   },
 
   checkAuth: async () => {
-    if (!isSupabaseConfigured) {
-      set({ isLoading: false, authError: 'Supabase non configurato' });
+    if (!isFirebaseConfigured || !auth) {
+      set({ isLoading: false, authError: 'Firebase non configurato' });
       return;
     }
     
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session?.user) {
-        set({
-          user: {
-            id: session.user.id,
-            email: session.user.email || '',
-            full_name: session.user.user_metadata?.full_name || '',
-            avatar_url: session.user.user_metadata?.avatar_url || '',
-          },
-          isAuthenticated: true,
-          isLoading: false,
-          authError: null,
-        });
-        await get().loadWorkspace();
-      } else {
-        set({ isLoading: false });
-      }
-    } catch (err: any) {
-      console.error('Auth check error:', err);
-      set({ isLoading: false, authError: err.message || 'Errore di connessione' });
-    }
+    return new Promise<void>((resolve) => {
+      onAuthStateChanged(auth!, async (fbUser: FirebaseUser | null) => {
+        if (fbUser) {
+          set({
+            user: {
+              id: fbUser.uid,
+              email: fbUser.email || '',
+              full_name: fbUser.displayName || '',
+              avatar_url: fbUser.photoURL || '',
+            },
+            isAuthenticated: true,
+            isLoading: false,
+            authError: null,
+          });
+          await get().loadWorkspace();
+        } else {
+          set({ isLoading: false });
+        }
+        resolve();
+      });
+    });
   },
 
   loadWorkspace: async () => {
     const { user } = get();
-    if (!user || !isSupabaseConfigured) return;
+    if (!user || !isFirebaseConfigured || !db) return;
     
     try {
-      const { data, error } = await supabase
-        .from('workspaces')
-        .select('*')
-        .eq('created_by', user.id)
-        .maybeSingle();
+      const q = query(
+        collection(db, 'workspaces'),
+        where('created_by', '==', user.id)
+      );
       
-      if (error) {
-        console.error('Load workspace error:', error);
-        return;
-      }
+      const snapshot = await getDocs(q);
       
-      if (data) {
-        set({ workspace: data as Workspace });
+      if (!snapshot.empty) {
+        const docSnap = snapshot.docs[0];
+        const data = docSnap.data();
+        
+        set({
+          workspace: {
+            id: docSnap.id,
+            name: data.name || '',
+            icon: data.icon || '📝',
+            created_by: data.created_by || user.id,
+            created_at: timestampToString(data.created_at),
+          }
+        });
+        
         await get().loadPages();
       }
     } catch (err) {
@@ -211,55 +267,76 @@ export const useStore = create<AppState>((set, get) => ({
 
   createWorkspace: async (name) => {
     const { user } = get();
-    if (!user || !isSupabaseConfigured) return;
+    if (!user || !isFirebaseConfigured || !db) return;
     
-    const id = uuidv4();
-    const { data, error } = await supabase
-      .from('workspaces')
-      .insert({
-        id,
+    try {
+      const workspaceRef = await addDoc(collection(db, 'workspaces'), {
         name,
         icon: '📝',
         created_by: user.id,
-      })
-      .select()
-      .single();
-    
-    if (error) throw error;
-    
-    // Add creator as owner member
-    await supabase.from('workspace_members').insert({
-      workspace_id: id,
-      user_id: user.id,
-      role: 'owner',
-    });
-    
-    set({ workspace: data as Workspace });
-    
-    // Create initial page
-    await get().createPage();
+        created_at: serverTimestamp(),
+        updated_at: serverTimestamp(),
+      });
+      
+      // Add creator as owner member
+      await addDoc(collection(db, 'workspace_members'), {
+        workspace_id: workspaceRef.id,
+        user_id: user.id,
+        role: 'owner',
+        invited_at: serverTimestamp(),
+        joined_at: serverTimestamp(),
+      });
+      
+      set({
+        workspace: {
+          id: workspaceRef.id,
+          name,
+          icon: '📝',
+          created_by: user.id,
+          created_at: new Date().toISOString(),
+        }
+      });
+      
+      // Create initial page
+      await get().createPage();
+    } catch (err) {
+      console.error('Create workspace error:', err);
+      throw err;
+    }
   },
 
   loadPages: async () => {
     const { workspace } = get();
-    if (!workspace || !isSupabaseConfigured) return;
+    if (!workspace || !isFirebaseConfigured || !db) return;
     
     try {
-      const { data, error } = await supabase
-        .from('pages')
-        .select('*')
-        .eq('workspace_id', workspace.id)
-        .eq('is_trashed', false)
-        .order('position');
+      const q = query(
+        collection(db, 'pages'),
+        where('workspace_id', '==', workspace.id),
+        where('is_trashed', '==', false),
+        orderBy('position', 'asc')
+      );
       
-      if (error) {
-        console.error('Load pages error:', error);
-        return;
-      }
+      const snapshot = await getDocs(q);
+      const pages: Page[] = snapshot.docs.map(docSnap => {
+        const data = docSnap.data();
+        return {
+          id: docSnap.id,
+          workspace_id: data.workspace_id || '',
+          parent_id: data.parent_id || null,
+          title: data.title || '',
+          icon: data.icon || '📄',
+          cover: data.cover || null,
+          position: data.position || 0,
+          created_by: data.created_by || '',
+          created_at: timestampToString(data.created_at),
+          updated_at: timestampToString(data.updated_at),
+          is_trashed: data.is_trashed || false,
+          is_favorite: data.is_favorite || false,
+        };
+      });
       
-      if (data) {
-        set({ pages: data as Page[] });
-      }
+      set({ pages });
     } catch (err) {
       console.error('Load pages error:', err);
     }
@@ -267,78 +344,113 @@ export const useStore = create<AppState>((set, get) => ({
 
   createPage: async (parentId = null) => {
     const { user, workspace, pages } = get();
-    if (!user || !workspace || !isSupabaseConfigured) return '';
+    if (!user || !workspace || !isFirebaseConfigured || !db) return '';
     
-    const id = uuidv4();
-    const position = pages.length;
-    
-    const { data, error } = await supabase
-      .from('pages')
-      .insert({
-        id,
+    try {
+      const position = pages.length;
+      const now = new Date().toISOString();
+      
+      const pageRef = await addDoc(collection(db, 'pages'), {
         workspace_id: workspace.id,
         parent_id: parentId,
         title: '',
         icon: '📄',
+        cover: null,
         position,
         created_by: user.id,
-      })
-      .select()
-      .single();
-    
-    if (error) throw error;
-    
-    // Create initial empty block
-    await supabase.from('blocks').insert({
-      id: uuidv4(),
-      page_id: id,
-      type: 'paragraph',
-      content: { text: '' },
-      position: 0,
-    });
-    
-    await get().loadPages();
-    set({ currentPageId: id });
-    
-    if (parentId) {
-      const expanded = new Set(get().expandedPages);
-      expanded.add(parentId);
-      set({ expandedPages: expanded });
+        created_at: serverTimestamp(),
+        updated_at: serverTimestamp(),
+        is_trashed: false,
+        is_favorite: false,
+      });
+      
+      // Create initial empty block
+      await addDoc(collection(db, 'blocks'), {
+        page_id: pageRef.id,
+        type: 'paragraph',
+        content: { text: '' },
+        position: 0,
+        parent_id: null,
+        created_at: serverTimestamp(),
+        updated_at: serverTimestamp(),
+      });
+      
+      const newPage: Page = {
+        id: pageRef.id,
+        workspace_id: workspace.id,
+        parent_id: parentId,
+        title: '',
+        icon: '📄',
+        cover: null,
+        position,
+        created_by: user.id,
+        created_at: now,
+        updated_at: now,
+        is_trashed: false,
+        is_favorite: false,
+      };
+      
+      set({ 
+        pages: [...pages, newPage],
+        currentPageId: pageRef.id 
+      });
+      
+      if (parentId) {
+        const expanded = new Set(get().expandedPages);
+        expanded.add(parentId);
+        set({ expandedPages: expanded });
+      }
+      
+      return pageRef.id;
+    } catch (err) {
+      console.error('Create page error:', err);
+      throw err;
     }
-    
-    return id;
   },
 
   updatePage: async (id, updates) => {
-    if (!isSupabaseConfigured) return;
+    if (!isFirebaseConfigured || !db) return;
     
     try {
-      await supabase
-        .from('pages')
-        .update({ ...updates, updated_at: new Date().toISOString() })
-        .eq('id', id);
+      const pageRef = doc(db, 'pages', id);
+      await updateDoc(pageRef, {
+        ...updates,
+        updated_at: serverTimestamp(),
+      });
       
-      await get().loadPages();
+      // Update local state immediately
+      set({
+        pages: get().pages.map(p => 
+          p.id === id 
+            ? { ...p, ...updates, updated_at: new Date().toISOString() }
+            : p
+        )
+      });
     } catch (err) {
       console.error('Update page error:', err);
     }
   },
 
   deletePage: async (id) => {
-    if (!isSupabaseConfigured) return;
+    if (!isFirebaseConfigured || !db) return;
     
     try {
-      await supabase
-        .from('pages')
-        .update({ is_trashed: true })
-        .eq('id', id);
+      const pageRef = doc(db, 'pages', id);
+      await updateDoc(pageRef, { 
+        is_trashed: true,
+        updated_at: serverTimestamp(),
+      });
       
       const { currentPageId } = get();
       if (currentPageId === id) {
         set({ currentPageId: null });
       }
       
-      await get().loadPages();
+      set({
+        pages: get().pages.map(p => 
+          p.id === id ? { ...p, is_trashed: true } : p
+        )
+      });
     } catch (err) {
       console.error('Delete page error:', err);
     }
@@ -357,55 +469,74 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   loadBlocks: async (pageId) => {
-    if (!isSupabaseConfigured) return;
+    if (!isFirebaseConfigured || !db) return;
     
     try {
-      const { data, error } = await supabase
-        .from('blocks')
-        .select('*')
-        .eq('page_id', pageId)
-        .order('position');
+      const q = query(
+        collection(db, 'blocks'),
+        where('page_id', '==', pageId),
+        orderBy('position', 'asc')
+      );
       
-      if (error) {
-        console.error('Load blocks error:', error);
-        return;
-      }
+      const snapshot = await getDocs(q);
+      const blocks: Block[] = snapshot.docs.map(docSnap => {
+        const data = docSnap.data();
+        return {
+          id: docSnap.id,
+          page_id: data.page_id || '',
+          type: data.type || 'paragraph',
+          content: data.content || {},
+          position: data.position || 0,
+          parent_id: data.parent_id || null,
+        };
+      });
       
-      if (data) {
-        set({ blocks: data as Block[] });
-      }
+      set({ blocks });
     } catch (err) {
       console.error('Load blocks error:', err);
     }
   },
 
   saveBlocks: async (pageId, blocks) => {
-    if (!isSupabaseConfigured) return;
+    if (!isFirebaseConfigured || !db) return;
+    
+    const firestore = db; // Type narrowing
     
     try {
-      // Delete existing blocks and insert new ones
-      await supabase.from('blocks').delete().eq('page_id', pageId);
+      // Delete existing blocks
+      const q = query(
+        collection(firestore, 'blocks'),
+        where('page_id', '==', pageId)
+      );
+      const snapshot = await getDocs(q);
       
-      if (blocks.length > 0) {
-        await supabase.from('blocks').insert(
-          blocks.map((block, index) => ({
-            id: uuidv4(),
-            page_id: pageId,
-            type: block.type,
-            content: block.content,
-            position: index,
-            parent_id: block.parent_id,
-          }))
-        );
-      }
+      const batch = writeBatch(firestore);
+      snapshot.docs.forEach(docSnap => {
+        batch.delete(docSnap.ref);
+      });
+      
+      // Insert new blocks
+      blocks.forEach((block, index) => {
+        const blockId = uuidv4();
+        const blockRef = doc(firestore, 'blocks', blockId);
+        batch.set(blockRef, {
+          page_id: pageId,
+          type: block.type,
+          content: block.content as any,
+          position: index,
+          parent_id: block.parent_id,
+          created_at: serverTimestamp(),
+          updated_at: serverTimestamp(),
+        });
+      });
+      
+      await batch.commit();
       
       set({ blocks });
       
       // Update page timestamp
-      await supabase
-        .from('pages')
-        .update({ updated_at: new Date().toISOString() })
-        .eq('id', pageId);
+      const pageRef = doc(firestore, 'pages', pageId);
+      await updateDoc(pageRef, { updated_at: serverTimestamp() });
     } catch (err) {
       console.error('Save blocks error:', err);
     }

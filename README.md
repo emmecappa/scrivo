@@ -17,13 +17,13 @@ Un clone di Notion con spazio di lavoro collaborativo, editor di documenti e can
 └───────────────────────┬─────────────────────────┘
                         │ HTTPS + WebSocket
 ┌───────────────────────┴─────────────────────────┐
-│                   SUPABASE                       │
+│                   FIREBASE                       │
 │  ┌──────────┐ ┌──────────┐ ┌─────────────────┐ │
-│  │   Auth   │ │PostgreSQL│ │   Realtime      │ │
-│  │ (Email)  │ │ (Dati)   │ │ (Collaborazione)│ │
+│  │   Auth   │ │Firestore │ │   Realtime      │ │
+│  │ (Email)  │ │ (NoSQL)  │ │ (onSnapshot)    │ │
 │  └──────────┘ └──────────┘ └─────────────────┘ │
 │  ┌──────────┐ ┌──────────┐                      │
-│  │   RLS    │ │ Storage  │                      │
+│  │  Rules   │ │ Storage  │                      │
 │  │(Sicurezza│ │(File/Img)│                      │
 │  └──────────┘ └──────────┘                      │
 └─────────────────────────────────────────────────┘
@@ -31,55 +31,56 @@ Un clone di Notion con spazio di lavoro collaborativo, editor di documenti e can
 
 ## 🚀 Setup Completo
 
-### 1. Creare il progetto Supabase
+### 1. Creare il progetto Firebase
 
-1. Vai su [supabase.com](https://supabase.com) e crea un account
-2. Clicca **"New Project"**
+1. Vai su [Firebase Console](https://console.firebase.google.com)
+2. Clicca **"Add project"**
 3. Inserisci:
-   - **Name**: `notion-clone` (o quello che preferisci)
-   - **Database Password**: (salvala da qualche parte!)
-   - **Region**: Europe West (Frankfurt) - o la più vicina a te
-4. Attendi la creazione del progetto (~2 min)
+   - **Project name**: `notion-clone`
+   - Google Analytics: puoi disabilitarlo
+4. Clicca **"Create project"**
 
-### 2. Configurare il Database
+### 2. Configurare Authentication
 
-1. Nel dashboard Supabase, vai su **SQL Editor** (icona laterale)
-2. Clicca **"New Query"**
-3. Copia e incolla il contenuto di `supabase-schema.sql`
-4. Clicca **"Run"** (o premi Ctrl+Enter)
-5. Verifica che tutte le tabelle siano state create in **Table Editor**
+1. Nel menu laterale → **Build → Authentication**
+2. Clicca **"Get started"**
+3. Nella tab **"Sign-in method"** → abilita **"Email/Password"**
+4. Salva
 
-### 3. Configurare l'Autenticazione
+### 3. Configurare Firestore Database
 
-1. Vai su **Authentication > Providers**
-2. Assicurati che **Email** sia abilitato
-3. In **Authentication > URL Configuration**:
-   - Site URL: `https://tuo-progetto.vercel.app`
-   - Redirect URLs: `https://tuo-progetto.vercel.app/**`
-4. (Opzionale) Disabilita "Confirm email" per testare più velocemente
+1. Nel menu laterale → **Build → Firestore Database**
+2. Clicca **"Create database"**
+3. Scegli **"Start in test mode"** (per iniziare)
+4. Seleziona la region più vicina a te
+5. Clicca **"Enable"**
 
-### 4. Abilitare Realtime
+### 4. Registrare l'app Web
 
-1. Vai su **Database > Replication**
-2. Abilita Realtime per le tabelle `blocks` e `pages`
+1. Vai su **Project Settings** (icona ingranaggio)
+2. Scorri fino a **"Your apps"**
+3. Clicca l'icona **Web** (`</>`)
+4. Nome app: `notion-clone-web`
+5. Clicca **"Register app"**
+6. **Copia la configurazione firebaseConfig**
 
 ### 5. Configurare le variabili d'ambiente
 
-1. Vai su **Settings > API** in Supabase
-2. Copia:
-   - **Project URL** → `VITE_SUPABASE_URL`
-   - **anon public key** → `VITE_SUPABASE_ANON_KEY`
-3. Crea un file `.env` nella root del progetto:
+Crea un file `.env` nella root del progetto:
 
 ```bash
 cp .env.example .env
 ```
 
-4. Modifica `.env` con i tuoi valori:
+Modifica `.env` con i valori della configurazione Firebase:
 
 ```env
-VITE_SUPABASE_URL=https://xxxxx.supabase.co
-VITE_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6...
+VITE_FIREBASE_API_KEY=AIzaSy...
+VITE_FIREBASE_AUTH_DOMAIN=tuo-progetto.firebaseapp.com
+VITE_FIREBASE_PROJECT_ID=tuo-progetto
+VITE_FIREBASE_STORAGE_BUCKET=tuo-progetto.appspot.com
+VITE_FIREBASE_MESSAGING_SENDER_ID=123456789
+VITE_FIREBASE_APP_ID=1:123456789:web:abcdef
 ```
 
 ### 6. Deploy su Vercel
@@ -88,9 +89,7 @@ VITE_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6...
 2. Vai su [vercel.com](https://vercel.com)
 3. Clicca **"New Project"** → Importa il repo
 4. Framework Preset: **Vite**
-5. Aggiungi le variabili d'ambiente:
-   - `VITE_SUPABASE_URL`
-   - `VITE_SUPABASE_ANON_KEY`
+5. Aggiungi le 6 variabili d'ambiente (come sopra)
 6. Clicca **"Deploy"**
 
 ## 📋 Funzionalità
@@ -112,8 +111,8 @@ VITE_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6...
 - [x] Eliminazione pagine (cestino)
 - [x] Icone personalizzate per pagina
 - [x] Salvataggio automatico
-- [x] Row Level Security (RLS)
-- [x] Realtime subscriptions
+- [x] Sicurezza Firestore Rules
+- [x] Realtime con onSnapshot
 
 ### 🔜 Fase 2 (Prossimi sviluppi)
 - [ ] Invito membri al workspace
@@ -135,66 +134,65 @@ VITE_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6...
 - [ ] API pubblica
 - [ ] Integrazioni (Slack, Google Drive)
 
-## 🗄️ Schema Database
+## 🗄️ Struttura Firestore
 
 ```
-workspaces
-├── id (UUID, PK)
-├── name (TEXT)
-├── icon (TEXT)
-├── created_by (UUID, FK → auth.users)
-├── created_at (TIMESTAMPTZ)
-└── updated_at (TIMESTAMPTZ)
+workspaces (collection)
+├── {workspaceId} (document)
+│   ├── name: string
+│   ├── icon: string
+│   ├── created_by: string (user ID)
+│   ├── created_at: timestamp
+│   └── updated_at: timestamp
 
-pages
-├── id (UUID, PK)
-├── workspace_id (UUID, FK → workspaces)
-├── parent_id (UUID, FK → pages) -- per nidificazione
-├── title (TEXT)
-├── icon (TEXT)
-├── cover (TEXT)
-├── position (INTEGER)
-├── created_by (UUID, FK → auth.users)
-├── created_at (TIMESTAMPTZ)
-├── updated_at (TIMESTAMPTZ)
-├── is_trashed (BOOLEAN)
-└── is_favorite (BOOLEAN)
+pages (collection)
+├── {pageId} (document)
+│   ├── workspace_id: string
+│   ├── parent_id: string | null
+│   ├── title: string
+│   ├── icon: string
+│   ├── cover: string | null
+│   ├── position: number
+│   ├── created_by: string
+│   ├── created_at: timestamp
+│   ├── updated_at: timestamp
+│   ├── is_trashed: boolean
+│   └── is_favorite: boolean
 
-blocks
-├── id (UUID, PK)
-├── page_id (UUID, FK → pages)
-├── type (TEXT) -- paragraph, heading1, heading2, etc.
-├── content (JSONB) -- contenuto strutturato
-├── position (INTEGER)
-├── parent_id (UUID, FK → blocks)
-├── created_at (TIMESTAMPTZ)
-└── updated_at (TIMESTAMPTZ)
+blocks (collection)
+├── {blockId} (document)
+│   ├── page_id: string
+│   ├── type: string (paragraph, heading1, heading2, etc.)
+│   ├── content: object (HTML/JSON)
+│   ├── position: number
+│   ├── parent_id: string | null
+│   ├── created_at: timestamp
+│   └── updated_at: timestamp
 
-workspace_members
-├── id (UUID, PK)
-├── workspace_id (UUID, FK → workspaces)
-├── user_id (UUID, FK → auth.users)
-├── role (TEXT) -- owner, editor, viewer
-├── invited_at (TIMESTAMPTZ)
-└── joined_at (TIMESTAMPTZ)
+workspace_members (collection)
+├── {memberId} (document)
+│   ├── workspace_id: string
+│   ├── user_id: string
+│   ├── role: string (owner, editor, viewer)
+│   ├── invited_at: timestamp
+│   └── joined_at: timestamp
 ```
 
 ## 🔒 Sicurezza
 
-- **Row Level Security (RLS)**: Ogni tabella ha policy che limitano l'accesso ai soli membri del workspace
-- **Ruoli**: Owner (tutto), Editor (crea/modifica), Viewer (solo lettura)
-- **Autenticazione**: Email/password con Supabase Auth
+- **Firestore Rules**: Limitano l'accesso ai soli utenti autenticati
+- **Authentication**: Email/password con Firebase Auth
 - **Crittografia**: Tutti i dati sono criptati in transito (HTTPS) e a riposo
+- **Validazione**: Le regole Firestore validano i dati in scrittura
 
-## 💰 Costi (Piano Gratuito)
+## 💰 Costi (Piano Gratuito - Spark Plan)
 
-### Supabase Free Tier
-- ✅ 500 MB database
-- ✅ 1 GB storage
-- ✅ 50,000 monthly active users
-- ✅ 500 MB file storage
-- ✅ 2 milioni di realtime messages/mese
-- ✅ 500,000 edge function invocations/mese
+### Firebase Free Tier
+- ✅ Firestore: 1 GB storage
+- ✅ Firestore: 50K letture/giorno, 20K scritture/giorno
+- ✅ Authentication: utenti illimitati
+- ✅ Hosting: 10 GB storage, 360 MB/giorno transfer
+- ✅ Storage: 5 GB per file
 
 ### Vercel Free Tier
 - ✅ Hosting illimitato
@@ -217,7 +215,7 @@ workspace_members
 | Zustand | State management |
 | Framer Motion | Animazioni |
 | Lucide React | Icone |
-| Supabase | Backend (Auth, DB, Realtime) |
+| Firebase | Backend (Auth, Firestore, Realtime) |
 | Vercel | Hosting |
 
 ## 📝 Sviluppo Locale
@@ -228,13 +226,47 @@ npm install
 
 # Copia le variabili d'ambiente
 cp .env.example .env
-# Modifica .env con i tuoi valori Supabase
+# Modifica .env con i tuoi valori Firebase
 
 # Avvia il server di sviluppo
 npm run dev
 
 # Build per produzione
 npm run build
+```
+
+## 🔥 Firestore Rules (Sicurezza)
+
+Dopo il setup iniziale, aggiungi queste regole in **Firestore → Rules**:
+
+```
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    match /workspaces/{workspaceId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update, delete: if isAuthenticated() && 
+        resource.data.created_by == request.auth.uid;
+    }
+    
+    match /pages/{pageId} {
+      allow read, write: if isAuthenticated();
+    }
+    
+    match /blocks/{blockId} {
+      allow read, write: if isAuthenticated();
+    }
+    
+    match /workspace_members/{memberId} {
+      allow read, write: if isAuthenticated();
+    }
+  }
+}
 ```
 
 ## 🤝 Contribuire
@@ -247,4 +279,4 @@ npm run build
 
 ---
 
-**Creato con ❤️ usando React, Supabase e Vercel**
+**Creato con ❤️ usando React, Firebase e Vercel**

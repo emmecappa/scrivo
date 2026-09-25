@@ -72,8 +72,12 @@ function MainLayout() {
 function ConfigWarning() {
   const [copied, setCopied] = useState(false);
   
-  const envExample = `VITE_SUPABASE_URL=https://tuo-progetto.supabase.co
-VITE_SUPABASE_ANON_KEY=eyJhbGciOi...`;
+  const envExample = `VITE_FIREBASE_API_KEY=AIzaSy...
+VITE_FIREBASE_AUTH_DOMAIN=tuo-progetto.firebaseapp.com
+VITE_FIREBASE_PROJECT_ID=tuo-progetto
+VITE_FIREBASE_STORAGE_BUCKET=tuo-progetto.appspot.com
+VITE_FIREBASE_MESSAGING_SENDER_ID=123456789
+VITE_FIREBASE_APP_ID=1:123456789:web:abcdef`;
 
   const handleCopy = () => {
     navigator.clipboard.writeText(envExample);
@@ -96,7 +100,7 @@ VITE_SUPABASE_ANON_KEY=eyJhbGciOi...`;
             <div>
               <h1 className="text-2xl font-bold text-gray-900">Configurazione Richiesta</h1>
               <p className="text-gray-500 mt-1">
-                Per usare l'app devi configurare Supabase con le tue credenziali.
+                Per usare l'app devi configurare Firebase con le tue credenziali.
               </p>
             </div>
           </div>
@@ -107,19 +111,19 @@ VITE_SUPABASE_ANON_KEY=eyJhbGciOi...`;
               <ol className="space-y-3 text-sm text-gray-600">
                 <li className="flex gap-2">
                   <span className="font-bold text-gray-800">1.</span>
-                  <span>Vai su <a href="https://supabase.com" target="_blank" rel="noopener" className="text-blue-600 underline hover:text-blue-800">supabase.com</a> e crea un progetto gratuito</span>
+                  <span>Vai su <a href="https://console.firebase.google.com" target="_blank" rel="noopener" className="text-blue-600 underline hover:text-blue-800">Firebase Console</a> e crea un progetto gratuito</span>
                 </li>
                 <li className="flex gap-2">
                   <span className="font-bold text-gray-800">2.</span>
-                  <span>Copia lo schema SQL dal file <code className="bg-gray-200 px-1.5 py-0.5 rounded text-xs">supabase-schema.sql</code> ed eseguilo nel SQL Editor di Supabase</span>
+                  <span>Abilita <strong>Authentication</strong> (Email/Password) e <strong>Firestore Database</strong></span>
                 </li>
                 <li className="flex gap-2">
                   <span className="font-bold text-gray-800">3.</span>
-                  <span>Vai su <strong>Settings → API</strong> in Supabase e copia <code className="bg-gray-200 px-1.5 py-0.5 rounded text-xs">Project URL</code> e <code className="bg-gray-200 px-1.5 py-0.5 rounded text-xs">anon key</code></span>
+                  <span>Vai su <strong>Project Settings → General → Your apps</strong> e registra un'app Web</span>
                 </li>
                 <li className="flex gap-2">
                   <span className="font-bold text-gray-800">4.</span>
-                  <span>Crea un file <code className="bg-gray-200 px-1.5 py-0.5 rounded text-xs">.env</code> nella root del progetto con le variabili qui sotto</span>
+                  <span>Copia la configurazione <code className="bg-gray-200 px-1.5 py-0.5 rounded text-xs">firebaseConfig</code> e inseriscila nel file <code className="bg-gray-200 px-1.5 py-0.5 rounded text-xs">.env</code> (variabili qui sotto)</span>
                 </li>
                 <li className="flex gap-2">
                   <span className="font-bold text-gray-800">5.</span>
@@ -147,6 +151,9 @@ VITE_SUPABASE_ANON_KEY=eyJhbGciOi...`;
             <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
               <p className="text-sm text-blue-800">
                 💡 <strong>Su Vercel:</strong> aggiungi le stesse variabili in Settings → Environment Variables del tuo progetto.
+              </p>
+              <p className="text-sm text-blue-800 mt-2">
+                📖 <strong>Backend:</strong> Questo progetto usa Firebase (Firestore + Auth).
               </p>
             </div>
           </div>
