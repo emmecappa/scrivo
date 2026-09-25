@@ -9,6 +9,8 @@ import Underline from '@tiptap/extension-underline';
 import Link from '@tiptap/extension-link';
 import Image from '@tiptap/extension-image';
 import { useStore } from '../store/useStore';
+import { db, isFirebaseConfigured } from '../lib/firebase';
+import { doc, onSnapshot, Unsubscribe } from 'firebase/firestore';
 import {
   Bold,
   Italic,
@@ -27,21 +29,35 @@ import {
   Link as LinkIcon,
   Undo,
   Redo,
-  MoreHorizontal,
-  GripVertical,
-  Plus,
-  Smile,
 } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
 
 const EMOJIS = ['📄', '📝', '📋', '📌', '🎯', '💡', '🔥', '⭐', '🚀', '💎', '🎨', '📊', '📈', '🗂️', '📁', '🏷️', '✅', '❌', '⚡', '🌟', '🎉', '💻', '📱', '🔧', '🛠️', '📐', '🧩', '🎪', '🌈', '🍀'];
 
+interface RemoteCursor {
+  userId: string;
+  email: string;
+  fullName: string;
+  color: string;
+  position: number;
+  selectionFrom?: number;
+  selectionTo?: number;
+}
+
 export default function DocumentEditor() {
-  const { currentPageId, pages, updatePage, blocks, loadBlocks, saveBlocks } = useStore();
-  const [isSaving, setIsSaving] = useState(false);
+  const { currentPageId, pages, updatePage, blocks, loadBlocks, saveBlocks, user, activeUsers } = useStore();
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
-  const saveTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
+  const [remoteCursors, setRemoteCursors] = useState<RemoteCursor[]>([]);
+  const [isLiveSyncing, setIsLiveSyncing] = useState(false);
+  const unsubscribeRef = useRef<Unsubscribe | null>(null);
+  const lastContentRef = useRef<string>('');
   
   const currentPage = pages.find(p => p.id === currentPageId);
+
+  // Get other users on this page
+  const otherUsersOnPage = activeUsers.filter(
+    u => u.userId !== user?.id && u.pageId === currentPageId
+  );
 
   const editor = useEditor({
     extensions: [
@@ -50,7 +66,7 @@ export default function DocumentEditor() {
         codeBlock: { HTMLAttributes: { class: 'bg-gray-900 text-gray-100 rounded-lg p-4 font-mono text-sm' } },
       }),
       Placeholder.configure({
-        placeholder: "Scrivi qualcosa o premi '/' per i comandi...",
+        placeholder: "Scrivi qualcosa... gli altri vedranno le modifiche in tempo reale!",
       }),
       Highlight.configure({ multicolor: true }),
       Underline,
@@ -60,31 +76,33 @@ export default function DocumentEditor() {
       Image.configure({ inline: true }),
     ],
     content: '',
+    // IMMEDIATE SAVE - No debounce for real-time collaboration
     onUpdate: ({ editor }) => {
       if (!currentPageId) return;
       
-      console.log('✏️ Editor content updated for page:', currentPageId);
-      setIsSaving(true);
-      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+      const html = editor.getHTML();
       
-      saveTimeoutRef.current = setTimeout(() => {
-        const html = editor.getHTML();
-        const json = editor.getJSON();
-        
-        console.log('💾 Saving content, HTML length:', html.length);
-        
-        const newBlocks = [{
-          id: 'main',
-          page_id: currentPageId,
-          type: 'paragraph' as const,
-          content: { html, json },
-          position: 0,
-          parent_id: null,
-        }];
-        
-        saveBlocks(currentPageId, newBlocks);
-        setIsSaving(false);
-      }, 1000);
+      // Only save if content actually changed
+      if (html === lastContentRef.current) return;
+      
+      lastContentRef.current = html;
+      setIsLiveSyncing(true);
+      
+      // Save immediately (no debounce)
+      const json = editor.getJSON();
+      
+      const newBlocks = [{
+        id: 'main',
+        page_id: currentPageId,
+        type: 'paragraph' as const,
+        content: { html, json },
+        position: 0,
+        parent_id: null,
+      }];
+      
+      saveBlocks(currentPageId, newBlocks).then(() => {
+        setIsLiveSyncing(false);
+      });
     },
     editorProps: {
       attributes: {
@@ -93,7 +111,75 @@ export default function DocumentEditor() {
     },
   });
 
-  // Load blocks when page changes
+  // REAL-TIME SYNC: Listen for changes from other users
+  useEffect(() => {
+    if (!currentPageId || !isFirebaseConfigured || !db || !editor) return;
+    
+    console.log('🔄 Starting real-time sync for page:', currentPageId);
+    
+    // Unsubscribe from previous subscription
+    if (unsubscribeRef.current) {
+      unsubscribeRef.current();
+    }
+    
+    // Listen to the first block of this page
+    const blocksQuery = doc(db, 'blocks', 'main_' + currentPageId);
+    
+    // Use onSnapshot for real-time updates
+    unsubscribeRef.current = onSnapshot(
+      doc(db, 'pages', currentPageId),
+      async (pageSnapshot) => {
+        if (!pageSnapshot.exists()) return;
+        
+        const pageData = pageSnapshot.data();
+        const lastEditedBy = pageData.last_edited_by;
+        const lastEditedAt = pageData.last_edited_at;
+        
+        // Only update if someone else edited
+        if (lastEditedBy && lastEditedBy !== user?.id) {
+          console.log('📝 Remote update detected from:', lastEditedBy);
+          
+          // Load the latest blocks
+          const { loadBlocks } = useStore.getState();
+          await loadBlocks(currentPageId);
+          
+          const pageBlocks = useStore.getState().blocks;
+          if (pageBlocks.length > 0 && pageBlocks[0].content?.html) {
+            const remoteHtml = pageBlocks[0].content.html;
+            
+            // Only update if content is different
+            if (remoteHtml !== lastContentRef.current) {
+              console.log('✅ Applying remote changes');
+              
+              // Save current cursor position
+              const { state } = editor;
+              const { from, to } = state.selection;
+              
+              // Update content
+              editor.commands.setContent(remoteHtml);
+              lastContentRef.current = remoteHtml;
+              
+              // Try to restore cursor position
+              try {
+                const newPos = Math.min(from, remoteHtml.length);
+                editor.commands.setTextSelection(newPos);
+              } catch (e) {
+                // Ignore cursor restoration errors
+              }
+            }
+          }
+        }
+      }
+    );
+    
+    return () => {
+      if (unsubscribeRef.current) {
+        unsubscribeRef.current();
+      }
+    };
+  }, [currentPageId, editor, user?.id]);
+
+  // Load initial content
   useEffect(() => {
     if (currentPageId) {
       console.log('🔄 Page changed, loading blocks for:', currentPageId);
@@ -103,14 +189,16 @@ export default function DocumentEditor() {
       
       loadBlocks(currentPageId).then(() => {
         const pageBlocks = useStore.getState().blocks;
-        console.log('📄 Blocks loaded for editor:', pageBlocks.length, pageBlocks);
+        console.log('📄 Blocks loaded for editor:', pageBlocks.length);
         
         if (pageBlocks.length > 0 && pageBlocks[0].content?.html) {
           console.log('✅ Setting editor content from saved HTML');
           editor?.commands.setContent(pageBlocks[0].content.html);
+          lastContentRef.current = pageBlocks[0].content.html;
         } else {
           console.log('⚠️ No saved content, setting empty editor');
           editor?.commands.setContent('');
+          lastContentRef.current = '';
         }
       }).catch(err => {
         console.error('❌ Error loading blocks:', err);
@@ -160,7 +248,7 @@ export default function DocumentEditor() {
             active={editor.isActive('italic')}
             title="Corsivo"
           >
-            <Italic className="w-4" />
+            <Italic className="w-4 h-4" />
           </ToolbarButton>
           <ToolbarButton
             onClick={() => editor.chain().focus().toggleUnderline().run()}
@@ -290,14 +378,18 @@ export default function DocumentEditor() {
             <Redo className="w-4 h-4" />
           </ToolbarButton>
 
-          {isSaving && (
-            <span className="text-xs text-gray-400 ml-2">Salvataggio...</span>
+          {/* Live sync indicator */}
+          {isLiveSyncing && (
+            <div className="flex items-center gap-1 ml-2 text-xs text-green-600">
+              <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+              <span>Sincronizzazione...</span>
+            </div>
           )}
         </div>
       )}
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto relative">
         <div className="max-w-4xl mx-auto">
           {/* Page Header */}
           <div className="px-16 pt-12">
@@ -336,12 +428,64 @@ export default function DocumentEditor() {
             
             <div className="flex items-center gap-2 text-sm text-gray-400 mb-8">
               <span>Ultima modifica: {new Date(currentPage.updated_at).toLocaleDateString('it-IT', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
+              
+              {/* Live editing indicator */}
+              {otherUsersOnPage.length > 0 && (
+                <div className="flex items-center gap-2 ml-4">
+                  <div className="flex -space-x-2">
+                    {otherUsersOnPage.slice(0, 3).map((activeUser) => (
+                      <div
+                        key={activeUser.userId}
+                        className="w-6 h-6 rounded-full border-2 border-white flex items-center justify-center text-white text-xs font-semibold"
+                        style={{ backgroundColor: activeUser.color }}
+                        title={`${activeUser.fullName || activeUser.email} sta modificando`}
+                      >
+                        {activeUser.fullName ? activeUser.fullName.charAt(0).toUpperCase() : activeUser.email.charAt(0).toUpperCase()}
+                      </div>
+                    ))}
+                  </div>
+                  <span className="text-xs text-gray-500">
+                    {otherUsersOnPage.length === 1 
+                      ? `${otherUsersOnPage[0].fullName || otherUsersOnPage[0].email} sta modificando...`
+                      : `${otherUsersOnPage.length} persone stanno modificando...`
+                    }
+                  </span>
+                </div>
+              )}
             </div>
           </div>
 
           {/* Editor */}
-          <div className="pb-32">
+          <div className="pb-32 relative">
             <EditorContent editor={editor} />
+            
+            {/* Remote cursors overlay */}
+            <AnimatePresence>
+              {remoteCursors.map((cursor) => (
+                <motion.div
+                  key={cursor.userId}
+                  initial={{ opacity: 0, scale: 0.8 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.8 }}
+                  className="absolute pointer-events-none"
+                  style={{
+                    left: `${cursor.position % 80}%`,
+                    top: `${Math.floor(cursor.position / 80) * 24}px`,
+                  }}
+                >
+                  <div
+                    className="w-0.5 h-5 animate-pulse"
+                    style={{ backgroundColor: cursor.color }}
+                  />
+                  <div
+                    className="absolute -top-6 left-0 px-2 py-0.5 rounded text-xs text-white whitespace-nowrap"
+                    style={{ backgroundColor: cursor.color }}
+                  >
+                    {cursor.fullName || cursor.email}
+                  </div>
+                </motion.div>
+              ))}
+            </AnimatePresence>
           </div>
         </div>
       </div>
