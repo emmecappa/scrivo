@@ -97,6 +97,10 @@ export default function DocumentEditor() {
   useEffect(() => {
     if (currentPageId) {
       console.log('🔄 Page changed, loading blocks for:', currentPageId);
+      
+      // Update presence
+      useStore.getState().updatePresence(currentPageId);
+      
       loadBlocks(currentPageId).then(() => {
         const pageBlocks = useStore.getState().blocks;
         console.log('📄 Blocks loaded for editor:', pageBlocks.length, pageBlocks);

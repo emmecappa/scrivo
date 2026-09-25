@@ -97,6 +97,11 @@ VITE_FIREBASE_APP_ID=1:123456789:web:abcdef
 ### ✅ Fase 1 (Questa versione)
 - [x] Autenticazione email/password
 - [x] Creazione workspace
+- [x] **Collaborazione in tempo reale**
+- [x] **Invito membri via email**
+- [x] **Gestione ruoli** (Owner, Editor, Viewer)
+- [x] **Presenza utenti** (vedi chi è online)
+- [x] **Indicatori di attività** (chi sta guardando la pagina)
 - [x] Pagine nidificate (albero)
 - [x] Editor rich text (TipTap)
 - [x] Formattazione: grassetto, corsivo, sottolineatura, evidenziato
@@ -173,10 +178,43 @@ workspace_members (collection)
 ├── {memberId} (document)
 │   ├── workspace_id: string
 │   ├── user_id: string
+│   ├── email: string
+│   ├── full_name: string
 │   ├── role: string (owner, editor, viewer)
+│   ├── status: string (active, invited)
 │   ├── invited_at: timestamp
-│   └── joined_at: timestamp
+│   └── joined_at: timestamp | null
+
+active_users (collection)
+├── {workspaceId_userId} (document)
+│   ├── workspace_id: string
+│   ├── user_id: string
+│   ├── email: string
+│   ├── full_name: string
+│   ├── page_id: string | null
+│   ├── last_seen: timestamp
+│   └── color: string
 ```
+
+## 🤝 Collaborazione
+
+### Invitare membri
+1. Clicca sull'icona **👥** nella top bar
+2. Inserisci l'email della persona
+3. Seleziona il ruolo (Editor o Visualizzatore)
+4. Clicca "Invia invito"
+
+### Ruoli
+- **👑 Proprietario**: Controllo completo del workspace
+- **✏️ Editor**: Può creare e modificare pagine
+- **👁️ Visualizzatore**: Può solo vedere le pagine
+
+### Presenza in tempo reale
+- Vedi gli avatar degli utenti attivi nella top bar
+- Indicatori di chi sta guardando la stessa pagina
+- Aggiornamento ogni 30 secondi
+
+📖 **Guida completa**: Vedi [COLLABORATION.md](./COLLABORATION.md)
 
 ## 🔒 Sicurezza
 
@@ -184,6 +222,7 @@ workspace_members (collection)
 - **Authentication**: Email/password con Firebase Auth
 - **Crittografia**: Tutti i dati sono criptati in transito (HTTPS) e a riposo
 - **Validazione**: Le regole Firestore validano i dati in scrittura
+- **Permessi**: Ruoli granulari per workspace e pagine
 
 ## 💰 Costi (Piano Gratuito - Spark Plan)
 

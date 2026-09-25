@@ -5,13 +5,15 @@ import WorkspaceSetup from './components/WorkspaceSetup';
 import Sidebar from './components/Sidebar';
 import DocumentEditor from './components/DocumentEditor';
 import DiagramCanvas from './components/DiagramCanvas';
-import { FileText, PenTool, Loader2, AlertTriangle, Copy, Check } from 'lucide-react';
+import MembersPanel from './components/MembersPanel';
+import ActiveUsers from './components/ActiveUsers';
+import { FileText, PenTool, Loader2, AlertTriangle, Copy, Check, Users } from 'lucide-react';
 import { motion } from 'framer-motion';
 
 type ViewMode = 'document' | 'diagram';
 
 function MainLayout() {
-  const { workspace, workspaceLoading, currentPageId, pages, user, blocks } = useStore();
+  const { workspace, workspaceLoading, currentPageId, pages, user, blocks, toggleMembersPanel, members } = useStore();
   const [viewMode, setViewMode] = useState<ViewMode>('document');
   const [showDebug, setShowDebug] = useState(false);
   
@@ -67,6 +69,19 @@ function MainLayout() {
           </div>
 
           <div className="flex-1" />
+
+          {/* Active Users */}
+          <ActiveUsers />
+
+          {/* Members button */}
+          <button
+            onClick={toggleMembersPanel}
+            className="flex items-center gap-2 px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition"
+            title="Gestisci membri"
+          >
+            <Users className="w-4 h-4" />
+            <span>{members.length}</span>
+          </button>
 
           {/* Breadcrumb */}
           {currentPage && (
@@ -124,6 +139,9 @@ function MainLayout() {
           {viewMode === 'document' ? <DocumentEditor /> : <DiagramCanvas />}
         </div>
       </div>
+
+      {/* Members Panel */}
+      <MembersPanel />
     </div>
   );
 }

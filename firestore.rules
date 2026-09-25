@@ -1,0 +1,65 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isWorkspaceMember(workspaceId) {
+      return isAuthenticated() && exists(/databases/$(database)/documents/workspace_members/$(workspaceId + '_' + request.auth.uid));
+    }
+    
+    function getMemberRole(workspaceId) {
+      let memberDoc = get(/databases/$(database)/documents/workspace_members/$(workspaceId + '_' + request.auth.uid));
+      return memberDoc.data.role;
+    }
+    
+    function isOwner(workspaceId) {
+      return isAuthenticated() && getMemberRole(workspaceId) == 'owner';
+    }
+    
+    function isEditor(workspaceId) {
+      return isAuthenticated() && (getMemberRole(workspaceId) == 'owner' || getMemberRole(workspaceId) == 'editor');
+    }
+    
+    function isViewer(workspaceId) {
+      return isAuthenticated() && (getMemberRole(workspaceId) == 'owner' || getMemberRole(workspaceId) == 'editor' || getMemberRole(workspaceId) == 'viewer');
+    }
+    
+    // Workspaces
+    match /workspaces/{workspaceId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update, delete: if isAuthenticated() && resource.data.created_by == request.auth.uid;
+    }
+    
+    // Pages
+    match /pages/{pageId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated();
+      allow delete: if isAuthenticated();
+    }
+    
+    // Blocks
+    match /blocks/{blockId} {
+      allow read, write: if isAuthenticated();
+    }
+    
+    // Workspace Members
+    match /workspace_members/{memberId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated();
+      allow delete: if isAuthenticated();
+    }
+    
+    // Active Users (presence)
+    match /active_users/{presenceId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated();
+    }
+  }
+}
