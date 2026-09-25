@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { supabase } from '../lib/supabase';
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { v4 as uuidv4 } from 'uuid';
 
 export interface User {
@@ -42,10 +42,14 @@ export interface Block {
 }
 
 interface AppState {
+  // Config
+  isConfigured: boolean;
+  
   // Auth
   user: User | null;
   isAuthenticated: boolean;
   isLoading: boolean;
+  authError: string | null;
   
   // Workspace
   workspace: Workspace | null;
@@ -85,9 +89,11 @@ interface AppState {
 }
 
 export const useStore = create<AppState>((set, get) => ({
+  isConfigured: isSupabaseConfigured,
   user: null,
   isAuthenticated: false,
   isLoading: true,
+  authError: null,
   workspace: null,
   pages: [],
   currentPageId: null,
@@ -97,6 +103,9 @@ export const useStore = create<AppState>((set, get) => ({
   isCreatingPage: false,
 
   login: async (email, password) => {
+    if (!isSupabaseConfigured) {
+      throw new Error('Supabase non configurato. Aggiungi le variabili VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY');
+    }
     const { data, error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) throw error;
     if (data.user) {
@@ -108,12 +117,16 @@ export const useStore = create<AppState>((set, get) => ({
           avatar_url: data.user.user_metadata?.avatar_url || '',
         },
         isAuthenticated: true,
+        authError: null,
       });
       await get().loadWorkspace();
     }
   },
 
   signup: async (email, password, fullName) => {
+    if (!isSupabaseConfigured) {
+      throw new Error('Supabase non configurato. Aggiungi le variabili VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY');
+    }
     const { data, error } = await supabase.auth.signUp({
       email,
       password,
@@ -129,53 +142,76 @@ export const useStore = create<AppState>((set, get) => ({
           avatar_url: '',
         },
         isAuthenticated: true,
+        authError: null,
       });
     }
   },
 
   logout: async () => {
-    await supabase.auth.signOut();
+    if (isSupabaseConfigured) {
+      await supabase.auth.signOut();
+    }
     set({ user: null, isAuthenticated: false, workspace: null, pages: [], currentPageId: null, blocks: [] });
   },
 
   checkAuth: async () => {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (session?.user) {
-      set({
-        user: {
-          id: session.user.id,
-          email: session.user.email || '',
-          full_name: session.user.user_metadata?.full_name || '',
-          avatar_url: session.user.user_metadata?.avatar_url || '',
-        },
-        isAuthenticated: true,
-        isLoading: false,
-      });
-      await get().loadWorkspace();
-    } else {
-      set({ isLoading: false });
+    if (!isSupabaseConfigured) {
+      set({ isLoading: false, authError: 'Supabase non configurato' });
+      return;
+    }
+    
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.user) {
+        set({
+          user: {
+            id: session.user.id,
+            email: session.user.email || '',
+            full_name: session.user.user_metadata?.full_name || '',
+            avatar_url: session.user.user_metadata?.avatar_url || '',
+          },
+          isAuthenticated: true,
+          isLoading: false,
+          authError: null,
+        });
+        await get().loadWorkspace();
+      } else {
+        set({ isLoading: false });
+      }
+    } catch (err: any) {
+      console.error('Auth check error:', err);
+      set({ isLoading: false, authError: err.message || 'Errore di connessione' });
     }
   },
 
   loadWorkspace: async () => {
     const { user } = get();
-    if (!user) return;
+    if (!user || !isSupabaseConfigured) return;
     
-    const { data } = await supabase
-      .from('workspaces')
-      .select('*')
-      .eq('created_by', user.id)
-      .single();
-    
-    if (data) {
-      set({ workspace: data as Workspace });
-      await get().loadPages();
+    try {
+      const { data, error } = await supabase
+        .from('workspaces')
+        .select('*')
+        .eq('created_by', user.id)
+        .maybeSingle();
+      
+      if (error) {
+        console.error('Load workspace error:', error);
+        return;
+      }
+      
+      if (data) {
+        set({ workspace: data as Workspace });
+        await get().loadPages();
+      }
+    } catch (err) {
+      console.error('Load workspace error:', err);
     }
   },
 
   createWorkspace: async (name) => {
     const { user } = get();
-    if (!user) return;
+    if (!user || !isSupabaseConfigured) return;
     
     const id = uuidv4();
     const { data, error } = await supabase
@@ -206,23 +242,32 @@ export const useStore = create<AppState>((set, get) => ({
 
   loadPages: async () => {
     const { workspace } = get();
-    if (!workspace) return;
+    if (!workspace || !isSupabaseConfigured) return;
     
-    const { data } = await supabase
-      .from('pages')
-      .select('*')
-      .eq('workspace_id', workspace.id)
-      .eq('is_trashed', false)
-      .order('position');
-    
-    if (data) {
-      set({ pages: data as Page[] });
+    try {
+      const { data, error } = await supabase
+        .from('pages')
+        .select('*')
+        .eq('workspace_id', workspace.id)
+        .eq('is_trashed', false)
+        .order('position');
+      
+      if (error) {
+        console.error('Load pages error:', error);
+        return;
+      }
+      
+      if (data) {
+        set({ pages: data as Page[] });
+      }
+    } catch (err) {
+      console.error('Load pages error:', err);
     }
   },
 
   createPage: async (parentId = null) => {
     const { user, workspace, pages } = get();
-    if (!user || !workspace) return '';
+    if (!user || !workspace || !isSupabaseConfigured) return '';
     
     const id = uuidv4();
     const position = pages.length;
@@ -265,26 +310,38 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   updatePage: async (id, updates) => {
-    await supabase
-      .from('pages')
-      .update({ ...updates, updated_at: new Date().toISOString() })
-      .eq('id', id);
+    if (!isSupabaseConfigured) return;
     
-    await get().loadPages();
+    try {
+      await supabase
+        .from('pages')
+        .update({ ...updates, updated_at: new Date().toISOString() })
+        .eq('id', id);
+      
+      await get().loadPages();
+    } catch (err) {
+      console.error('Update page error:', err);
+    }
   },
 
   deletePage: async (id) => {
-    await supabase
-      .from('pages')
-      .update({ is_trashed: true })
-      .eq('id', id);
+    if (!isSupabaseConfigured) return;
     
-    const { currentPageId } = get();
-    if (currentPageId === id) {
-      set({ currentPageId: null });
+    try {
+      await supabase
+        .from('pages')
+        .update({ is_trashed: true })
+        .eq('id', id);
+      
+      const { currentPageId } = get();
+      if (currentPageId === id) {
+        set({ currentPageId: null });
+      }
+      
+      await get().loadPages();
+    } catch (err) {
+      console.error('Delete page error:', err);
     }
-    
-    await get().loadPages();
   },
 
   setCurrentPage: (id) => set({ currentPageId: id }),
@@ -300,41 +357,58 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   loadBlocks: async (pageId) => {
-    const { data } = await supabase
-      .from('blocks')
-      .select('*')
-      .eq('page_id', pageId)
-      .order('position');
+    if (!isSupabaseConfigured) return;
     
-    if (data) {
-      set({ blocks: data as Block[] });
+    try {
+      const { data, error } = await supabase
+        .from('blocks')
+        .select('*')
+        .eq('page_id', pageId)
+        .order('position');
+      
+      if (error) {
+        console.error('Load blocks error:', error);
+        return;
+      }
+      
+      if (data) {
+        set({ blocks: data as Block[] });
+      }
+    } catch (err) {
+      console.error('Load blocks error:', err);
     }
   },
 
   saveBlocks: async (pageId, blocks) => {
-    // Delete existing blocks and insert new ones
-    await supabase.from('blocks').delete().eq('page_id', pageId);
+    if (!isSupabaseConfigured) return;
     
-    if (blocks.length > 0) {
-      await supabase.from('blocks').insert(
-        blocks.map((block, index) => ({
-          id: uuidv4(),
-          page_id: pageId,
-          type: block.type,
-          content: block.content,
-          position: index,
-          parent_id: block.parent_id,
-        }))
-      );
+    try {
+      // Delete existing blocks and insert new ones
+      await supabase.from('blocks').delete().eq('page_id', pageId);
+      
+      if (blocks.length > 0) {
+        await supabase.from('blocks').insert(
+          blocks.map((block, index) => ({
+            id: uuidv4(),
+            page_id: pageId,
+            type: block.type,
+            content: block.content,
+            position: index,
+            parent_id: block.parent_id,
+          }))
+        );
+      }
+      
+      set({ blocks });
+      
+      // Update page timestamp
+      await supabase
+        .from('pages')
+        .update({ updated_at: new Date().toISOString() })
+        .eq('id', pageId);
+    } catch (err) {
+      console.error('Save blocks error:', err);
     }
-    
-    set({ blocks });
-    
-    // Update page timestamp
-    await supabase
-      .from('pages')
-      .update({ updated_at: new Date().toISOString() })
-      .eq('id', pageId);
   },
 
   toggleSidebar: () => set({ sidebarOpen: !get().sidebarOpen }),

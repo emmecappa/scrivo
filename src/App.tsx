@@ -5,7 +5,7 @@ import WorkspaceSetup from './components/WorkspaceSetup';
 import Sidebar from './components/Sidebar';
 import DocumentEditor from './components/DocumentEditor';
 import DiagramCanvas from './components/DiagramCanvas';
-import { FileText, PenTool, Loader2 } from 'lucide-react';
+import { FileText, PenTool, Loader2, AlertTriangle, Copy, Check } from 'lucide-react';
 import { motion } from 'framer-motion';
 
 type ViewMode = 'document' | 'diagram';
@@ -69,8 +69,95 @@ function MainLayout() {
   );
 }
 
+function ConfigWarning() {
+  const [copied, setCopied] = useState(false);
+  
+  const envExample = `VITE_SUPABASE_URL=https://tuo-progetto.supabase.co
+VITE_SUPABASE_ANON_KEY=eyJhbGciOi...`;
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(envExample);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-amber-50 to-orange-50 flex items-center justify-center p-4">
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="w-full max-w-2xl"
+      >
+        <div className="bg-white rounded-2xl shadow-xl p-8 border border-amber-200">
+          <div className="flex items-start gap-4 mb-6">
+            <div className="w-12 h-12 bg-amber-100 rounded-xl flex items-center justify-center flex-shrink-0">
+              <AlertTriangle className="w-6 h-6 text-amber-600" />
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold text-gray-900">Configurazione Richiesta</h1>
+              <p className="text-gray-500 mt-1">
+                Per usare l'app devi configurare Supabase con le tue credenziali.
+              </p>
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            <div className="bg-gray-50 rounded-xl p-5 border border-gray-200">
+              <h3 className="font-semibold text-gray-800 mb-3">📋 Passaggi da seguire:</h3>
+              <ol className="space-y-3 text-sm text-gray-600">
+                <li className="flex gap-2">
+                  <span className="font-bold text-gray-800">1.</span>
+                  <span>Vai su <a href="https://supabase.com" target="_blank" rel="noopener" className="text-blue-600 underline hover:text-blue-800">supabase.com</a> e crea un progetto gratuito</span>
+                </li>
+                <li className="flex gap-2">
+                  <span className="font-bold text-gray-800">2.</span>
+                  <span>Copia lo schema SQL dal file <code className="bg-gray-200 px-1.5 py-0.5 rounded text-xs">supabase-schema.sql</code> ed eseguilo nel SQL Editor di Supabase</span>
+                </li>
+                <li className="flex gap-2">
+                  <span className="font-bold text-gray-800">3.</span>
+                  <span>Vai su <strong>Settings → API</strong> in Supabase e copia <code className="bg-gray-200 px-1.5 py-0.5 rounded text-xs">Project URL</code> e <code className="bg-gray-200 px-1.5 py-0.5 rounded text-xs">anon key</code></span>
+                </li>
+                <li className="flex gap-2">
+                  <span className="font-bold text-gray-800">4.</span>
+                  <span>Crea un file <code className="bg-gray-200 px-1.5 py-0.5 rounded text-xs">.env</code> nella root del progetto con le variabili qui sotto</span>
+                </li>
+                <li className="flex gap-2">
+                  <span className="font-bold text-gray-800">5.</span>
+                  <span>Ricarica questa pagina</span>
+                </li>
+              </ol>
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-sm font-medium text-gray-700">Contenuto del file .env:</label>
+                <button
+                  onClick={handleCopy}
+                  className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 transition"
+                >
+                  {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                  {copied ? 'Copiato!' : 'Copia'}
+                </button>
+              </div>
+              <pre className="bg-gray-900 text-green-400 p-4 rounded-xl text-sm overflow-x-auto font-mono">
+                {envExample}
+              </pre>
+            </div>
+
+            <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
+              <p className="text-sm text-blue-800">
+                💡 <strong>Su Vercel:</strong> aggiungi le stesse variabili in Settings → Environment Variables del tuo progetto.
+              </p>
+            </div>
+          </div>
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
 export default function App() {
-  const { isAuthenticated, isLoading, checkAuth } = useStore();
+  const { isAuthenticated, isLoading, checkAuth, isConfigured } = useStore();
 
   useEffect(() => {
     checkAuth();
@@ -89,6 +176,10 @@ export default function App() {
         </motion.div>
       </div>
     );
+  }
+
+  if (!isConfigured) {
+    return <ConfigWarning />;
   }
 
   if (!isAuthenticated) {
