@@ -63,12 +63,15 @@ export default function DocumentEditor() {
     onUpdate: ({ editor }) => {
       if (!currentPageId) return;
       
+      console.log('✏️ Editor content updated for page:', currentPageId);
       setIsSaving(true);
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
       
       saveTimeoutRef.current = setTimeout(() => {
         const html = editor.getHTML();
         const json = editor.getJSON();
+        
+        console.log('💾 Saving content, HTML length:', html.length);
         
         const newBlocks = [{
           id: 'main',
@@ -93,13 +96,20 @@ export default function DocumentEditor() {
   // Load blocks when page changes
   useEffect(() => {
     if (currentPageId) {
+      console.log('🔄 Page changed, loading blocks for:', currentPageId);
       loadBlocks(currentPageId).then(() => {
         const pageBlocks = useStore.getState().blocks;
+        console.log('📄 Blocks loaded for editor:', pageBlocks.length, pageBlocks);
+        
         if (pageBlocks.length > 0 && pageBlocks[0].content?.html) {
+          console.log('✅ Setting editor content from saved HTML');
           editor?.commands.setContent(pageBlocks[0].content.html);
         } else {
+          console.log('⚠️ No saved content, setting empty editor');
           editor?.commands.setContent('');
         }
+      }).catch(err => {
+        console.error('❌ Error loading blocks:', err);
       });
     }
   }, [currentPageId]);

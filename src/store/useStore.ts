@@ -588,6 +588,8 @@ export const useStore = create<AppState>((set, get) => ({
     if (!isFirebaseConfigured || !db) return;
     
     try {
+      console.log('📄 Loading blocks for page:', pageId);
+      
       const q = query(
         collection(db, 'blocks'),
         where('page_id', '==', pageId),
@@ -595,6 +597,12 @@ export const useStore = create<AppState>((set, get) => ({
       );
       
       const snapshot = await getDocs(q);
+      console.log('📊 Blocks query result:', { 
+        empty: snapshot.empty, 
+        size: snapshot.size,
+        docs: snapshot.docs.map(d => ({ id: d.id, data: d.data() }))
+      });
+      
       const blocks: Block[] = snapshot.docs.map(docSnap => {
         const data = docSnap.data();
         return {
@@ -607,9 +615,19 @@ export const useStore = create<AppState>((set, get) => ({
         };
       });
       
+      console.log('✅ Blocks loaded:', blocks.length, blocks);
       set({ blocks });
-    } catch (err) {
-      console.error('Load blocks error:', err);
+    } catch (err: any) {
+      console.error('❌ Load blocks error:', err);
+      console.error('Error details:', {
+        code: err.code,
+        message: err.message,
+        name: err.name
+      });
+      
+      if (err.code === 'permission-denied') {
+        console.error('🚫 ERRORE PERMESSI: Aggiorna le regole di sicurezza Firestore!');
+      }
     }
   },
 
@@ -619,12 +637,15 @@ export const useStore = create<AppState>((set, get) => ({
     const firestore = db; // Type narrowing
     
     try {
+      console.log('💾 Saving blocks for page:', pageId, 'blocks count:', blocks.length);
+      
       // Delete existing blocks
       const q = query(
         collection(firestore, 'blocks'),
         where('page_id', '==', pageId)
       );
       const snapshot = await getDocs(q);
+      console.log('🗑️ Deleting existing blocks:', snapshot.size);
       
       const batch = writeBatch(firestore);
       snapshot.docs.forEach(docSnap => {
@@ -647,14 +668,25 @@ export const useStore = create<AppState>((set, get) => ({
       });
       
       await batch.commit();
+      console.log('✅ Blocks saved successfully');
       
       set({ blocks });
       
       // Update page timestamp
       const pageRef = doc(firestore, 'pages', pageId);
       await updateDoc(pageRef, { updated_at: serverTimestamp() });
-    } catch (err) {
-      console.error('Save blocks error:', err);
+      console.log('✅ Page timestamp updated');
+    } catch (err: any) {
+      console.error('❌ Save blocks error:', err);
+      console.error('Error details:', {
+        code: err.code,
+        message: err.message,
+        name: err.name
+      });
+      
+      if (err.code === 'permission-denied') {
+        console.error('🚫 ERRORE PERMESSI: Aggiorna le regole di sicurezza Firestore!');
+      }
     }
   },
 
