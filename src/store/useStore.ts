@@ -77,6 +77,7 @@ interface AppState {
   
   // Workspace
   workspace: Workspace | null;
+  workspaceLoading: boolean;
   
   // Pages
   pages: Page[];
@@ -127,6 +128,7 @@ export const useStore = create<AppState>((set, get) => ({
   isLoading: true,
   authError: null,
   workspace: null,
+  workspaceLoading: false,
   pages: [],
   currentPageId: null,
   expandedPages: new Set(),
@@ -151,6 +153,7 @@ export const useStore = create<AppState>((set, get) => ({
         },
         isAuthenticated: true,
         authError: null,
+        workspaceLoading: true,
       });
       
       await get().loadWorkspace();
@@ -194,6 +197,7 @@ export const useStore = create<AppState>((set, get) => ({
         },
         isAuthenticated: true,
         authError: null,
+        workspaceLoading: true,
       });
       
       // Carica il workspace (se esiste)
@@ -244,6 +248,7 @@ export const useStore = create<AppState>((set, get) => ({
             isAuthenticated: true,
             isLoading: false,
             authError: null,
+            workspaceLoading: true,
           });
           
           // Attendi un momento per assicurarti che lo stato sia aggiornato
@@ -269,6 +274,8 @@ export const useStore = create<AppState>((set, get) => ({
       console.log('⚠️ Load workspace: skipped -', { hasUser: !!user, isConfigured: isFirebaseConfigured, hasDb: !!db });
       return;
     }
+    
+    set({ workspaceLoading: true });
     
     try {
       console.log('📂 Loading workspace for user:', user.id, user.email);
@@ -298,13 +305,15 @@ export const useStore = create<AppState>((set, get) => ({
             icon: data.icon || '📝',
             created_by: data.created_by || user.id,
             created_at: timestampToString(data.created_at),
-          }
+          },
+          workspaceLoading: false
         });
         
         console.log('📄 Caricamento pagine...');
         await get().loadPages();
       } else {
         console.log('⚠️ No workspace found for user - showing workspace creation screen');
+        set({ workspaceLoading: false });
       }
     } catch (err: any) {
       console.error('❌ Load workspace error:', err);
@@ -313,6 +322,8 @@ export const useStore = create<AppState>((set, get) => ({
         message: err.message,
         name: err.name
       });
+      
+      set({ workspaceLoading: false });
       
       // Se è un errore di permessi, mostra un messaggio chiaro
       if (err.code === 'permission-denied') {
@@ -577,6 +588,8 @@ export const useStore = create<AppState>((set, get) => ({
     if (!isFirebaseConfigured || !db) return;
     
     try {
+      console.log('📄 Loading blocks for page:', pageId);
+      
       const q = query(
         collection(db, 'blocks'),
         where('page_id', '==', pageId),
@@ -584,6 +597,12 @@ export const useStore = create<AppState>((set, get) => ({
       );
       
       const snapshot = await getDocs(q);
+      console.log('📊 Blocks query result:', { 
+        empty: snapshot.empty, 
+        size: snapshot.size,
+        docs: snapshot.docs.map(d => ({ id: d.id, data: d.data() }))
+      });
+      
       const blocks: Block[] = snapshot.docs.map(docSnap => {
         const data = docSnap.data();
         return {
@@ -596,9 +615,19 @@ export const useStore = create<AppState>((set, get) => ({
         };
       });
       
+      console.log('✅ Blocks loaded:', blocks.length, blocks);
       set({ blocks });
-    } catch (err) {
-      console.error('Load blocks error:', err);
+    } catch (err: any) {
+      console.error('❌ Load blocks error:', err);
+      console.error('Error details:', {
+        code: err.code,
+        message: err.message,
+        name: err.name
+      });
+      
+      if (err.code === 'permission-denied') {
+        console.error('🚫 ERRORE PERMESSI: Aggiorna le regole di sicurezza Firestore!');
+      }
     }
   },
 
@@ -608,12 +637,15 @@ export const useStore = create<AppState>((set, get) => ({
     const firestore = db; // Type narrowing
     
     try {
+      console.log('💾 Saving blocks for page:', pageId, 'blocks count:', blocks.length);
+      
       // Delete existing blocks
       const q = query(
         collection(firestore, 'blocks'),
         where('page_id', '==', pageId)
       );
       const snapshot = await getDocs(q);
+      console.log('🗑️ Deleting existing blocks:', snapshot.size);
       
       const batch = writeBatch(firestore);
       snapshot.docs.forEach(docSnap => {
@@ -636,14 +668,25 @@ export const useStore = create<AppState>((set, get) => ({
       });
       
       await batch.commit();
+      console.log('✅ Blocks saved successfully');
       
       set({ blocks });
       
       // Update page timestamp
       const pageRef = doc(firestore, 'pages', pageId);
       await updateDoc(pageRef, { updated_at: serverTimestamp() });
-    } catch (err) {
-      console.error('Save blocks error:', err);
+      console.log('✅ Page timestamp updated');
+    } catch (err: any) {
+      console.error('❌ Save blocks error:', err);
+      console.error('Error details:', {
+        code: err.code,
+        message: err.message,
+        name: err.name
+      });
+      
+      if (err.code === 'permission-denied') {
+        console.error('🚫 ERRORE PERMESSI: Aggiorna le regole di sicurezza Firestore!');
+      }
     }
   },
 
