@@ -11,11 +11,27 @@ import { motion } from 'framer-motion';
 type ViewMode = 'document' | 'diagram';
 
 function MainLayout() {
-  const { workspace, currentPageId, pages, user, blocks } = useStore();
+  const { workspace, workspaceLoading, currentPageId, pages, user, blocks } = useStore();
   const [viewMode, setViewMode] = useState<ViewMode>('document');
   const [showDebug, setShowDebug] = useState(false);
   
   const currentPage = pages.find(p => p.id === currentPageId);
+
+  // Mostra un loader durante il caricamento del workspace
+  if (workspaceLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className="text-center"
+        >
+          <Loader2 className="w-8 h-8 animate-spin text-gray-400 mx-auto mb-3" />
+          <p className="text-sm text-gray-400">Caricamento workspace...</p>
+        </motion.div>
+      </div>
+    );
+  }
 
   if (!workspace) {
     return <WorkspaceSetup />;

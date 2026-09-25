@@ -77,6 +77,7 @@ interface AppState {
   
   // Workspace
   workspace: Workspace | null;
+  workspaceLoading: boolean;
   
   // Pages
   pages: Page[];
@@ -127,6 +128,7 @@ export const useStore = create<AppState>((set, get) => ({
   isLoading: true,
   authError: null,
   workspace: null,
+  workspaceLoading: false,
   pages: [],
   currentPageId: null,
   expandedPages: new Set(),
@@ -151,6 +153,7 @@ export const useStore = create<AppState>((set, get) => ({
         },
         isAuthenticated: true,
         authError: null,
+        workspaceLoading: true,
       });
       
       await get().loadWorkspace();
@@ -194,6 +197,7 @@ export const useStore = create<AppState>((set, get) => ({
         },
         isAuthenticated: true,
         authError: null,
+        workspaceLoading: true,
       });
       
       // Carica il workspace (se esiste)
@@ -244,6 +248,7 @@ export const useStore = create<AppState>((set, get) => ({
             isAuthenticated: true,
             isLoading: false,
             authError: null,
+            workspaceLoading: true,
           });
           
           // Attendi un momento per assicurarti che lo stato sia aggiornato
@@ -269,6 +274,8 @@ export const useStore = create<AppState>((set, get) => ({
       console.log('⚠️ Load workspace: skipped -', { hasUser: !!user, isConfigured: isFirebaseConfigured, hasDb: !!db });
       return;
     }
+    
+    set({ workspaceLoading: true });
     
     try {
       console.log('📂 Loading workspace for user:', user.id, user.email);
@@ -298,13 +305,15 @@ export const useStore = create<AppState>((set, get) => ({
             icon: data.icon || '📝',
             created_by: data.created_by || user.id,
             created_at: timestampToString(data.created_at),
-          }
+          },
+          workspaceLoading: false
         });
         
         console.log('📄 Caricamento pagine...');
         await get().loadPages();
       } else {
         console.log('⚠️ No workspace found for user - showing workspace creation screen');
+        set({ workspaceLoading: false });
       }
     } catch (err: any) {
       console.error('❌ Load workspace error:', err);
@@ -313,6 +322,8 @@ export const useStore = create<AppState>((set, get) => ({
         message: err.message,
         name: err.name
       });
+      
+      set({ workspaceLoading: false });
       
       // Se è un errore di permessi, mostra un messaggio chiaro
       if (err.code === 'permission-denied') {
