@@ -220,13 +220,20 @@ export const useStore = create<AppState>((set, get) => ({
 
   checkAuth: async () => {
     if (!isFirebaseConfigured || !auth) {
+      console.log('⚠️ Firebase non configurato');
       set({ isLoading: false, authError: 'Firebase non configurato' });
       return;
     }
     
+    console.log('🔍 Controllo autenticazione...');
+    
     return new Promise<void>((resolve) => {
-      onAuthStateChanged(auth!, async (fbUser: FirebaseUser | null) => {
+      const unsubscribe = onAuthStateChanged(auth!, async (fbUser: FirebaseUser | null) => {
+        console.log('🔔 onAuthStateChanged triggered:', fbUser ? `User: ${fbUser.email}` : 'No user');
+        
         if (fbUser) {
+          console.log('✅ Utente autenticato:', fbUser.email, 'UID:', fbUser.uid);
+          
           set({
             user: {
               id: fbUser.uid,
@@ -238,11 +245,20 @@ export const useStore = create<AppState>((set, get) => ({
             isLoading: false,
             authError: null,
           });
+          
+          // Attendi un momento per assicurarti che lo stato sia aggiornato
+          await new Promise(r => setTimeout(r, 100));
+          
+          console.log('📂 Caricamento workspace...');
           await get().loadWorkspace();
         } else {
+          console.log('❌ Nessun utente autenticato');
           set({ isLoading: false });
         }
+        
         resolve();
+        // Unsubscribe dopo la prima chiamata per evitare loop
+        unsubscribe();
       });
     });
   },
@@ -250,12 +266,12 @@ export const useStore = create<AppState>((set, get) => ({
   loadWorkspace: async () => {
     const { user } = get();
     if (!user || !isFirebaseConfigured || !db) {
-      console.log('Load workspace: skipped -', { hasUser: !!user, isConfigured: isFirebaseConfigured, hasDb: !!db });
+      console.log('⚠️ Load workspace: skipped -', { hasUser: !!user, isConfigured: isFirebaseConfigured, hasDb: !!db });
       return;
     }
     
     try {
-      console.log('Loading workspace for user:', user.id);
+      console.log('📂 Loading workspace for user:', user.id, user.email);
       
       const q = query(
         collection(db, 'workspaces'),
@@ -263,13 +279,17 @@ export const useStore = create<AppState>((set, get) => ({
       );
       
       const snapshot = await getDocs(q);
-      console.log('Workspace query result:', { empty: snapshot.empty, size: snapshot.size });
+      console.log('📊 Workspace query result:', { 
+        empty: snapshot.empty, 
+        size: snapshot.size,
+        docs: snapshot.docs.map(d => ({ id: d.id, data: d.data() }))
+      });
       
       if (!snapshot.empty) {
         const docSnap = snapshot.docs[0];
         const data = docSnap.data();
         
-        console.log('Workspace found:', docSnap.id, data);
+        console.log('✅ Workspace found:', docSnap.id, data);
         
         set({
           workspace: {
@@ -281,34 +301,58 @@ export const useStore = create<AppState>((set, get) => ({
           }
         });
         
+        console.log('📄 Caricamento pagine...');
         await get().loadPages();
       } else {
-        console.log('No workspace found for user');
+        console.log('⚠️ No workspace found for user - showing workspace creation screen');
       }
-    } catch (err) {
-      console.error('Load workspace error:', err);
+    } catch (err: any) {
+      console.error('❌ Load workspace error:', err);
+      console.error('Error details:', {
+        code: err.code,
+        message: err.message,
+        name: err.name
+      });
+      
+      // Se è un errore di permessi, mostra un messaggio chiaro
+      if (err.code === 'permission-denied') {
+        console.error('🚫 ERRORE PERMESSI: Aggiorna le regole di sicurezza Firestore!');
+        console.error('Vai su Firebase Console → Firestore Database → Rules e aggiorna le regole');
+      }
     }
   },
 
   createWorkspace: async (name) => {
     const { user } = get();
     if (!user || !isFirebaseConfigured || !db) {
-      console.error('Create workspace: missing prerequisites', { hasUser: !!user, isConfigured: isFirebaseConfigured, hasDb: !!db });
-      return;
+      console.error('❌ Create workspace: missing prerequisites', { hasUser: !!user, isConfigured: isFirebaseConfigured, hasDb: !!db });
+      throw new Error('Configurazione incompleta');
     }
     
     try {
-      console.log('Creating workspace:', name, 'for user:', user.id);
+      console.log('🏗️ Creating workspace:', name, 'for user:', user.id, user.email);
       
-      const workspaceRef = await addDoc(collection(db, 'workspaces'), {
+      const workspaceData = {
         name,
         icon: '📝',
         created_by: user.id,
         created_at: serverTimestamp(),
         updated_at: serverTimestamp(),
-      });
+      };
       
-      console.log('Workspace created with ID:', workspaceRef.id);
+      console.log('📝 Workspace data:', workspaceData);
+      
+      const workspaceRef = await addDoc(collection(db, 'workspaces'), workspaceData);
+      
+      console.log('✅ Workspace created with ID:', workspaceRef.id);
+      
+      // Verify the workspace was actually saved
+      const verifyDoc = await getDoc(workspaceRef);
+      if (!verifyDoc.exists()) {
+        throw new Error('Workspace non è stato salvato correttamente in Firestore');
+      }
+      
+      console.log('✅ Workspace verified in Firestore:', verifyDoc.data());
       
       // Add creator as owner member
       await addDoc(collection(db, 'workspace_members'), {
@@ -318,6 +362,8 @@ export const useStore = create<AppState>((set, get) => ({
         invited_at: serverTimestamp(),
         joined_at: serverTimestamp(),
       });
+      
+      console.log('✅ Workspace member added');
       
       set({
         workspace: {
@@ -329,13 +375,29 @@ export const useStore = create<AppState>((set, get) => ({
         }
       });
       
-      console.log('Workspace set in state');
+      console.log('✅ Workspace set in state');
       
       // Create initial page
+      console.log('📄 Creating initial page...');
       await get().createPage();
-      console.log('Initial page created');
-    } catch (err) {
-      console.error('Create workspace error:', err);
+      console.log('✅ Initial page created');
+      
+      // Reload pages to ensure they're in state
+      await get().loadPages();
+      console.log('✅ Pages reloaded');
+      
+    } catch (err: any) {
+      console.error('❌ Create workspace error:', err);
+      console.error('Error details:', {
+        code: err.code,
+        message: err.message,
+        name: err.name
+      });
+      
+      if (err.code === 'permission-denied') {
+        throw new Error('Permessi negati. Aggiorna le regole di sicurezza Firestore!');
+      }
+      
       throw err;
     }
   },

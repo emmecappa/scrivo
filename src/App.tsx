@@ -68,6 +68,19 @@ function MainLayout() {
           >
             🐛
           </button>
+          
+          {/* Reload button */}
+          <button
+            onClick={async () => {
+              console.log('🔄 Forzo ricaricamento dati...');
+              await useStore.getState().loadWorkspace();
+              console.log('✅ Dati ricaricati');
+            }}
+            className="text-xs text-gray-400 hover:text-gray-600 px-2 py-1 rounded transition"
+            title="Ricarica dati"
+          >
+            🔄
+          </button>
         </div>
 
         {/* Debug panel */}
