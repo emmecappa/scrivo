@@ -1,0 +1,546 @@
+import { create } from 'zustand';
+import { auth, db, isFirebaseConfigured } from '../lib/firebase';
+import {
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  signOut,
+  onAuthStateChanged,
+  updateProfile,
+  User as FirebaseUser,
+} from 'firebase/auth';
+import {
+  collection,
+  doc,
+  getDocs,
+  getDoc,
+  addDoc,
+  updateDoc,
+  deleteDoc,
+  query,
+  where,
+  orderBy,
+  serverTimestamp,
+  Timestamp,
+  onSnapshot,
+  writeBatch,
+} from 'firebase/firestore';
+import { v4 as uuidv4 } from 'uuid';
+
+export interface User {
+  id: string;
+  email: string;
+  full_name: string;
+  avatar_url: string;
+}
+
+export interface Workspace {
+  id: string;
+  name: string;
+  icon: string;
+  created_by: string;
+  created_at: string;
+}
+
+export interface Page {
+  id: string;
+  workspace_id: string;
+  parent_id: string | null;
+  title: string;
+  icon: string;
+  cover: string | null;
+  position: number;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  is_trashed: boolean;
+  is_favorite: boolean;
+}
+
+export interface Block {
+  id: string;
+  page_id: string;
+  type: string;
+  content: any;
+  position: number;
+  parent_id: string | null;
+}
+
+interface AppState {
+  // Config
+  isConfigured: boolean;
+  
+  // Auth
+  user: User | null;
+  isAuthenticated: boolean;
+  isLoading: boolean;
+  authError: string | null;
+  
+  // Workspace
+  workspace: Workspace | null;
+  
+  // Pages
+  pages: Page[];
+  currentPageId: string | null;
+  expandedPages: Set<string>;
+  
+  // Blocks
+  blocks: Block[];
+  
+  // UI
+  sidebarOpen: boolean;
+  isCreatingPage: boolean;
+  
+  // Actions
+  login: (email: string, password: string) => Promise<void>;
+  signup: (email: string, password: string, fullName: string) => Promise<void>;
+  logout: () => Promise<void>;
+  checkAuth: () => Promise<void>;
+  
+  loadWorkspace: () => Promise<void>;
+  createWorkspace: (name: string) => Promise<void>;
+  
+  loadPages: () => Promise<void>;
+  createPage: (parentId?: string | null) => Promise<string>;
+  updatePage: (id: string, updates: Partial<Page>) => Promise<void>;
+  deletePage: (id: string) => Promise<void>;
+  setCurrentPage: (id: string | null) => void;
+  togglePageExpanded: (id: string) => void;
+  
+  loadBlocks: (pageId: string) => Promise<void>;
+  saveBlocks: (pageId: string, blocks: Block[]) => Promise<void>;
+  
+  toggleSidebar: () => void;
+}
+
+// Helper per convertire Timestamp Firestore in stringa ISO
+const timestampToString = (ts: any): string => {
+  if (!ts) return new Date().toISOString();
+  if (ts instanceof Timestamp) return ts.toDate().toISOString();
+  if (typeof ts === 'string') return ts;
+  return new Date().toISOString();
+};
+
+export const useStore = create<AppState>((set, get) => ({
+  isConfigured: isFirebaseConfigured,
+  user: null,
+  isAuthenticated: false,
+  isLoading: true,
+  authError: null,
+  workspace: null,
+  pages: [],
+  currentPageId: null,
+  expandedPages: new Set(),
+  blocks: [],
+  sidebarOpen: true,
+  isCreatingPage: false,
+
+  login: async (email, password) => {
+    if (!isFirebaseConfigured || !auth) {
+      throw new Error('Firebase non configurato. Aggiungi le variabili VITE_FIREBASE_*');
+    }
+    try {
+      const userCredential = await signInWithEmailAndPassword(auth, email, password);
+      const fbUser = userCredential.user;
+      
+      set({
+        user: {
+          id: fbUser.uid,
+          email: fbUser.email || '',
+          full_name: fbUser.displayName || '',
+          avatar_url: fbUser.photoURL || '',
+        },
+        isAuthenticated: true,
+        authError: null,
+      });
+      
+      await get().loadWorkspace();
+    } catch (err: any) {
+      console.error('Login error:', err);
+      throw new Error(err.message || 'Errore di login');
+    }
+  },
+
+  signup: async (email, password, fullName) => {
+    if (!isFirebaseConfigured || !auth) {
+      throw new Error('Firebase non configurato. Aggiungi le variabili VITE_FIREBASE_*');
+    }
+    try {
+      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+      const fbUser = userCredential.user;
+      
+      // Aggiorna il displayName
+      if (fbUser) {
+        await updateProfile(fbUser, { displayName: fullName });
+      }
+      
+      set({
+        user: {
+          id: fbUser.uid,
+          email: fbUser.email || '',
+          full_name: fullName,
+          avatar_url: '',
+        },
+        isAuthenticated: true,
+        authError: null,
+      });
+    } catch (err: any) {
+      console.error('Signup error:', err);
+      throw new Error(err.message || 'Errore di registrazione');
+    }
+  },
+
+  logout: async () => {
+    if (isFirebaseConfigured && auth) {
+      await signOut(auth);
+    }
+    set({ 
+      user: null, 
+      isAuthenticated: false, 
+      workspace: null, 
+      pages: [], 
+      currentPageId: null, 
+      blocks: [] 
+    });
+  },
+
+  checkAuth: async () => {
+    if (!isFirebaseConfigured || !auth) {
+      set({ isLoading: false, authError: 'Firebase non configurato' });
+      return;
+    }
+    
+    return new Promise<void>((resolve) => {
+      onAuthStateChanged(auth!, async (fbUser: FirebaseUser | null) => {
+        if (fbUser) {
+          set({
+            user: {
+              id: fbUser.uid,
+              email: fbUser.email || '',
+              full_name: fbUser.displayName || '',
+              avatar_url: fbUser.photoURL || '',
+            },
+            isAuthenticated: true,
+            isLoading: false,
+            authError: null,
+          });
+          await get().loadWorkspace();
+        } else {
+          set({ isLoading: false });
+        }
+        resolve();
+      });
+    });
+  },
+
+  loadWorkspace: async () => {
+    const { user } = get();
+    if (!user || !isFirebaseConfigured || !db) return;
+    
+    try {
+      const q = query(
+        collection(db, 'workspaces'),
+        where('created_by', '==', user.id)
+      );
+      
+      const snapshot = await getDocs(q);
+      
+      if (!snapshot.empty) {
+        const docSnap = snapshot.docs[0];
+        const data = docSnap.data();
+        
+        set({
+          workspace: {
+            id: docSnap.id,
+            name: data.name || '',
+            icon: data.icon || '📝',
+            created_by: data.created_by || user.id,
+            created_at: timestampToString(data.created_at),
+          }
+        });
+        
+        await get().loadPages();
+      }
+    } catch (err) {
+      console.error('Load workspace error:', err);
+    }
+  },
+
+  createWorkspace: async (name) => {
+    const { user } = get();
+    if (!user || !isFirebaseConfigured || !db) return;
+    
+    try {
+      const workspaceRef = await addDoc(collection(db, 'workspaces'), {
+        name,
+        icon: '📝',
+        created_by: user.id,
+        created_at: serverTimestamp(),
+        updated_at: serverTimestamp(),
+      });
+      
+      // Add creator as owner member
+      await addDoc(collection(db, 'workspace_members'), {
+        workspace_id: workspaceRef.id,
+        user_id: user.id,
+        role: 'owner',
+        invited_at: serverTimestamp(),
+        joined_at: serverTimestamp(),
+      });
+      
+      set({
+        workspace: {
+          id: workspaceRef.id,
+          name,
+          icon: '📝',
+          created_by: user.id,
+          created_at: new Date().toISOString(),
+        }
+      });
+      
+      // Create initial page
+      await get().createPage();
+    } catch (err) {
+      console.error('Create workspace error:', err);
+      throw err;
+    }
+  },
+
+  loadPages: async () => {
+    const { workspace } = get();
+    if (!workspace || !isFirebaseConfigured || !db) return;
+    
+    try {
+      const q = query(
+        collection(db, 'pages'),
+        where('workspace_id', '==', workspace.id),
+        where('is_trashed', '==', false),
+        orderBy('position', 'asc')
+      );
+      
+      const snapshot = await getDocs(q);
+      const pages: Page[] = snapshot.docs.map(docSnap => {
+        const data = docSnap.data();
+        return {
+          id: docSnap.id,
+          workspace_id: data.workspace_id || '',
+          parent_id: data.parent_id || null,
+          title: data.title || '',
+          icon: data.icon || '📄',
+          cover: data.cover || null,
+          position: data.position || 0,
+          created_by: data.created_by || '',
+          created_at: timestampToString(data.created_at),
+          updated_at: timestampToString(data.updated_at),
+          is_trashed: data.is_trashed || false,
+          is_favorite: data.is_favorite || false,
+        };
+      });
+      
+      set({ pages });
+    } catch (err) {
+      console.error('Load pages error:', err);
+    }
+  },
+
+  createPage: async (parentId = null) => {
+    const { user, workspace, pages } = get();
+    if (!user || !workspace || !isFirebaseConfigured || !db) return '';
+    
+    try {
+      const position = pages.length;
+      const now = new Date().toISOString();
+      
+      const pageRef = await addDoc(collection(db, 'pages'), {
+        workspace_id: workspace.id,
+        parent_id: parentId,
+        title: '',
+        icon: '📄',
+        cover: null,
+        position,
+        created_by: user.id,
+        created_at: serverTimestamp(),
+        updated_at: serverTimestamp(),
+        is_trashed: false,
+        is_favorite: false,
+      });
+      
+      // Create initial empty block
+      await addDoc(collection(db, 'blocks'), {
+        page_id: pageRef.id,
+        type: 'paragraph',
+        content: { text: '' },
+        position: 0,
+        parent_id: null,
+        created_at: serverTimestamp(),
+        updated_at: serverTimestamp(),
+      });
+      
+      const newPage: Page = {
+        id: pageRef.id,
+        workspace_id: workspace.id,
+        parent_id: parentId,
+        title: '',
+        icon: '📄',
+        cover: null,
+        position,
+        created_by: user.id,
+        created_at: now,
+        updated_at: now,
+        is_trashed: false,
+        is_favorite: false,
+      };
+      
+      set({ 
+        pages: [...pages, newPage],
+        currentPageId: pageRef.id 
+      });
+      
+      if (parentId) {
+        const expanded = new Set(get().expandedPages);
+        expanded.add(parentId);
+        set({ expandedPages: expanded });
+      }
+      
+      return pageRef.id;
+    } catch (err) {
+      console.error('Create page error:', err);
+      throw err;
+    }
+  },
+
+  updatePage: async (id, updates) => {
+    if (!isFirebaseConfigured || !db) return;
+    
+    try {
+      const pageRef = doc(db, 'pages', id);
+      await updateDoc(pageRef, {
+        ...updates,
+        updated_at: serverTimestamp(),
+      });
+      
+      // Update local state immediately
+      set({
+        pages: get().pages.map(p => 
+          p.id === id 
+            ? { ...p, ...updates, updated_at: new Date().toISOString() }
+            : p
+        )
+      });
+    } catch (err) {
+      console.error('Update page error:', err);
+    }
+  },
+
+  deletePage: async (id) => {
+    if (!isFirebaseConfigured || !db) return;
+    
+    try {
+      const pageRef = doc(db, 'pages', id);
+      await updateDoc(pageRef, { 
+        is_trashed: true,
+        updated_at: serverTimestamp(),
+      });
+      
+      const { currentPageId } = get();
+      if (currentPageId === id) {
+        set({ currentPageId: null });
+      }
+      
+      set({
+        pages: get().pages.map(p => 
+          p.id === id ? { ...p, is_trashed: true } : p
+        )
+      });
+    } catch (err) {
+      console.error('Delete page error:', err);
+    }
+  },
+
+  setCurrentPage: (id) => set({ currentPageId: id }),
+
+  togglePageExpanded: (id) => {
+    const expanded = new Set(get().expandedPages);
+    if (expanded.has(id)) {
+      expanded.delete(id);
+    } else {
+      expanded.add(id);
+    }
+    set({ expandedPages: expanded });
+  },
+
+  loadBlocks: async (pageId) => {
+    if (!isFirebaseConfigured || !db) return;
+    
+    try {
+      const q = query(
+        collection(db, 'blocks'),
+        where('page_id', '==', pageId),
+        orderBy('position', 'asc')
+      );
+      
+      const snapshot = await getDocs(q);
+      const blocks: Block[] = snapshot.docs.map(docSnap => {
+        const data = docSnap.data();
+        return {
+          id: docSnap.id,
+          page_id: data.page_id || '',
+          type: data.type || 'paragraph',
+          content: data.content || {},
+          position: data.position || 0,
+          parent_id: data.parent_id || null,
+        };
+      });
+      
+      set({ blocks });
+    } catch (err) {
+      console.error('Load blocks error:', err);
+    }
+  },
+
+  saveBlocks: async (pageId, blocks) => {
+    if (!isFirebaseConfigured || !db) return;
+    
+    const firestore = db; // Type narrowing
+    
+    try {
+      // Delete existing blocks
+      const q = query(
+        collection(firestore, 'blocks'),
+        where('page_id', '==', pageId)
+      );
+      const snapshot = await getDocs(q);
+      
+      const batch = writeBatch(firestore);
+      snapshot.docs.forEach(docSnap => {
+        batch.delete(docSnap.ref);
+      });
+      
+      // Insert new blocks
+      blocks.forEach((block, index) => {
+        const blockId = uuidv4();
+        const blockRef = doc(firestore, 'blocks', blockId);
+        batch.set(blockRef, {
+          page_id: pageId,
+          type: block.type,
+          content: block.content as any,
+          position: index,
+          parent_id: block.parent_id,
+          created_at: serverTimestamp(),
+          updated_at: serverTimestamp(),
+        });
+      });
+      
+      await batch.commit();
+      
+      set({ blocks });
+      
+      // Update page timestamp
+      const pageRef = doc(firestore, 'pages', pageId);
+      await updateDoc(pageRef, { updated_at: serverTimestamp() });
+    } catch (err) {
+      console.error('Save blocks error:', err);
+    }
+  },
+
+  toggleSidebar: () => set({ sidebarOpen: !get().sidebarOpen }),
+}));
