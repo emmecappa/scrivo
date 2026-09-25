@@ -34,23 +34,18 @@ import { motion, AnimatePresence } from 'framer-motion';
 
 const EMOJIS = ['📄', '📝', '📋', '📌', '🎯', '💡', '🔥', '⭐', '🚀', '💎', '🎨', '📊', '📈', '🗂️', '📁', '🏷️', '✅', '❌', '⚡', '🌟', '🎉', '💻', '📱', '🔧', '🛠️', '📐', '🧩', '🎪', '🌈', '🍀'];
 
-interface RemoteCursor {
-  userId: string;
-  email: string;
-  fullName: string;
-  color: string;
-  position: number;
-  selectionFrom?: number;
-  selectionTo?: number;
-}
+// Ottimizzazione: Debounce di 2 secondi (compromesso reattività/costo)
+const SAVE_DEBOUNCE_MS = 2000;
 
 export default function DocumentEditor() {
   const { currentPageId, pages, updatePage, blocks, loadBlocks, saveBlocks, user, activeUsers } = useStore();
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
-  const [remoteCursors, setRemoteCursors] = useState<RemoteCursor[]>([]);
-  const [isLiveSyncing, setIsLiveSyncing] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
+  const saveTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
   const unsubscribeRef = useRef<Unsubscribe | null>(null);
   const lastContentRef = useRef<string>('');
+  const isRemoteUpdateRef = useRef<boolean>(false);
   
   const currentPage = pages.find(p => p.id === currentPageId);
 
@@ -66,7 +61,7 @@ export default function DocumentEditor() {
         codeBlock: { HTMLAttributes: { class: 'bg-gray-900 text-gray-100 rounded-lg p-4 font-mono text-sm' } },
       }),
       Placeholder.configure({
-        placeholder: "Scrivi qualcosa... gli altri vedranno le modifiche in tempo reale!",
+        placeholder: "Scrivi qualcosa... il salvataggio è automatico ogni 2 secondi",
       }),
       Highlight.configure({ multicolor: true }),
       Underline,
@@ -76,33 +71,42 @@ export default function DocumentEditor() {
       Image.configure({ inline: true }),
     ],
     content: '',
-    // IMMEDIATE SAVE - No debounce for real-time collaboration
+    // OTTIMIZZATO: Debounce di 2 secondi per ridurre i costi
     onUpdate: ({ editor }) => {
-      if (!currentPageId) return;
+      if (!currentPageId || isRemoteUpdateRef.current) return;
       
       const html = editor.getHTML();
       
-      // Only save if content actually changed
+      // Solo salva se il contenuto è cambiato
       if (html === lastContentRef.current) return;
       
       lastContentRef.current = html;
-      setIsLiveSyncing(true);
       
-      // Save immediately (no debounce)
-      const json = editor.getJSON();
+      // Clear previous timeout
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+      }
       
-      const newBlocks = [{
-        id: 'main',
-        page_id: currentPageId,
-        type: 'paragraph' as const,
-        content: { html, json },
-        position: 0,
-        parent_id: null,
-      }];
-      
-      saveBlocks(currentPageId, newBlocks).then(() => {
-        setIsLiveSyncing(false);
-      });
+      // Debounce: salva dopo 2 secondi di inattività
+      saveTimeoutRef.current = setTimeout(() => {
+        setIsSaving(true);
+        
+        const json = editor.getJSON();
+        
+        const newBlocks = [{
+          id: 'main',
+          page_id: currentPageId,
+          type: 'paragraph' as const,
+          content: { html, json },
+          position: 0,
+          parent_id: null,
+        }];
+        
+        saveBlocks(currentPageId, newBlocks).then(() => {
+          setIsSaving(false);
+          setLastSavedAt(new Date());
+        });
+      }, SAVE_DEBOUNCE_MS);
     },
     editorProps: {
       attributes: {
@@ -122,10 +126,7 @@ export default function DocumentEditor() {
       unsubscribeRef.current();
     }
     
-    // Listen to the first block of this page
-    const blocksQuery = doc(db, 'blocks', 'main_' + currentPageId);
-    
-    // Use onSnapshot for real-time updates
+    // Listen to the page document for real-time updates
     unsubscribeRef.current = onSnapshot(
       doc(db, 'pages', currentPageId),
       async (pageSnapshot) => {
@@ -133,11 +134,13 @@ export default function DocumentEditor() {
         
         const pageData = pageSnapshot.data();
         const lastEditedBy = pageData.last_edited_by;
-        const lastEditedAt = pageData.last_edited_at;
         
         // Only update if someone else edited
         if (lastEditedBy && lastEditedBy !== user?.id) {
           console.log('📝 Remote update detected from:', lastEditedBy);
+          
+          // Set flag to prevent save loop
+          isRemoteUpdateRef.current = true;
           
           // Load the latest blocks
           const { loadBlocks } = useStore.getState();
@@ -153,7 +156,7 @@ export default function DocumentEditor() {
               
               // Save current cursor position
               const { state } = editor;
-              const { from, to } = state.selection;
+              const { from } = state.selection;
               
               // Update content
               editor.commands.setContent(remoteHtml);
@@ -168,6 +171,11 @@ export default function DocumentEditor() {
               }
             }
           }
+          
+          // Reset flag after a short delay
+          setTimeout(() => {
+            isRemoteUpdateRef.current = false;
+          }, 100);
         }
       }
     );
@@ -378,13 +386,20 @@ export default function DocumentEditor() {
             <Redo className="w-4 h-4" />
           </ToolbarButton>
 
-          {/* Live sync indicator */}
-          {isLiveSyncing && (
-            <div className="flex items-center gap-1 ml-2 text-xs text-green-600">
-              <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-              <span>Sincronizzazione...</span>
-            </div>
-          )}
+          {/* Save status indicator */}
+          <div className="flex items-center gap-2 ml-2 text-xs">
+            {isSaving ? (
+              <div className="flex items-center gap-1 text-orange-600">
+                <div className="w-2 h-2 bg-orange-500 rounded-full animate-pulse" />
+                <span>Salvataggio...</span>
+              </div>
+            ) : lastSavedAt ? (
+              <div className="flex items-center gap-1 text-gray-400">
+                <div className="w-2 h-2 bg-green-500 rounded-full" />
+                <span>Salvato {lastSavedAt.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' })}</span>
+              </div>
+            ) : null}
+          </div>
         </div>
       )}
 
@@ -458,34 +473,6 @@ export default function DocumentEditor() {
           {/* Editor */}
           <div className="pb-32 relative">
             <EditorContent editor={editor} />
-            
-            {/* Remote cursors overlay */}
-            <AnimatePresence>
-              {remoteCursors.map((cursor) => (
-                <motion.div
-                  key={cursor.userId}
-                  initial={{ opacity: 0, scale: 0.8 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  exit={{ opacity: 0, scale: 0.8 }}
-                  className="absolute pointer-events-none"
-                  style={{
-                    left: `${cursor.position % 80}%`,
-                    top: `${Math.floor(cursor.position / 80) * 24}px`,
-                  }}
-                >
-                  <div
-                    className="w-0.5 h-5 animate-pulse"
-                    style={{ backgroundColor: cursor.color }}
-                  />
-                  <div
-                    className="absolute -top-6 left-0 px-2 py-0.5 rounded text-xs text-white whitespace-nowrap"
-                    style={{ backgroundColor: cursor.color }}
-                  >
-                    {cursor.fullName || cursor.email}
-                  </div>
-                </motion.div>
-              ))}
-            </AnimatePresence>
           </div>
         </div>
       </div>
