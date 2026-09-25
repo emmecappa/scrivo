@@ -2,61 +2,62 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     
-    // Helper functions
+    // Helper function
     function isAuthenticated() {
       return request.auth != null;
     }
     
-    function isWorkspaceMember(workspaceId) {
-      return isAuthenticated() && exists(/databases/$(database)/documents/workspace_members/$(workspaceId + '_' + request.auth.uid));
-    }
-    
-    function getMemberRole(workspaceId) {
-      let memberDoc = get(/databases/$(database)/documents/workspace_members/$(workspaceId + '_' + request.auth.uid));
-      return memberDoc.data.role;
-    }
-    
-    function isOwner(workspaceId) {
-      return isAuthenticated() && getMemberRole(workspaceId) == 'owner';
-    }
-    
-    function isEditor(workspaceId) {
-      return isAuthenticated() && (getMemberRole(workspaceId) == 'owner' || getMemberRole(workspaceId) == 'editor');
-    }
-    
-    function isViewer(workspaceId) {
-      return isAuthenticated() && (getMemberRole(workspaceId) == 'owner' || getMemberRole(workspaceId) == 'editor' || getMemberRole(workspaceId) == 'viewer');
-    }
-    
-    // Workspaces
+    // Workspaces - Allow read if user is owner or member
     match /workspaces/{workspaceId} {
       allow read: if isAuthenticated();
       allow create: if isAuthenticated();
       allow update, delete: if isAuthenticated() && resource.data.created_by == request.auth.uid;
     }
     
-    // Pages
+    // Pages - Allow read/write if authenticated
     match /pages/{pageId} {
-      allow read: if isAuthenticated();
-      allow create: if isAuthenticated();
-      allow update: if isAuthenticated();
-      allow delete: if isAuthenticated();
+      allow read, write: if isAuthenticated();
     }
     
-    // Blocks
+    // Blocks - Allow read/write if authenticated
     match /blocks/{blockId} {
       allow read, write: if isAuthenticated();
     }
     
-    // Workspace Members
+    // Workspace Members - Allow read if user is member or invited by email
     match /workspace_members/{memberId} {
-      allow read: if isAuthenticated();
+      allow read: if isAuthenticated() && (
+        // User can read their own membership
+        resource.data.user_id == request.auth.uid ||
+        // User can read if invited by email
+        resource.data.email == request.auth.token.email ||
+        // Workspace owner can read any membership
+        exists(/databases/$(database)/documents/workspaces/$(resource.data.workspace_id)) &&
+        get(/databases/$(database)/documents/workspaces/$(resource.data.workspace_id)).data.created_by == request.auth.uid
+      );
+      
       allow create: if isAuthenticated();
-      allow update: if isAuthenticated();
-      allow delete: if isAuthenticated();
+      
+      allow update: if isAuthenticated() && (
+        // User can update their own membership (accept invitation)
+        resource.data.user_id == request.auth.uid ||
+        resource.data.email == request.auth.token.email ||
+        // Workspace owner can update any membership
+        exists(/databases/$(database)/documents/workspaces/$(resource.data.workspace_id)) &&
+        get(/databases/$(database)/documents/workspaces/$(resource.data.workspace_id)).data.created_by == request.auth.uid
+      );
+      
+      allow delete: if isAuthenticated() && (
+        // User can delete their own membership
+        resource.data.user_id == request.auth.uid ||
+        resource.data.email == request.auth.token.email ||
+        // Workspace owner can delete any membership
+        exists(/databases/$(database)/documents/workspaces/$(resource.data.workspace_id)) &&
+        get(/databases/$(database)/documents/workspaces/$(resource.data.workspace_id)).data.created_by == request.auth.uid
+      );
     }
     
-    // Active Users (presence)
+    // Active Users (presence) - Allow read/write if authenticated
     match /active_users/{presenceId} {
       allow read: if isAuthenticated();
       allow write: if isAuthenticated();

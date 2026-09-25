@@ -7,6 +7,7 @@ import DocumentEditor from './components/DocumentEditor';
 import DiagramCanvas from './components/DiagramCanvas';
 import MembersPanel from './components/MembersPanel';
 import ActiveUsers from './components/ActiveUsers';
+import PendingInvites from './components/PendingInvites';
 import { FileText, PenTool, Loader2, AlertTriangle, Copy, Check, Users } from 'lucide-react';
 import { motion } from 'framer-motion';
 
@@ -135,8 +136,16 @@ function MainLayout() {
         )}
 
         {/* Content */}
-        <div className="flex-1 overflow-hidden">
-          {viewMode === 'document' ? <DocumentEditor /> : <DiagramCanvas />}
+        <div className="flex-1 overflow-hidden flex flex-col">
+          {/* Pending Invites Banner */}
+          <div className="px-4 pt-4">
+            <PendingInvites />
+          </div>
+          
+          {/* Main Content */}
+          <div className="flex-1 overflow-hidden">
+            {viewMode === 'document' ? <DocumentEditor /> : <DiagramCanvas />}
+          </div>
         </div>
       </div>
 
