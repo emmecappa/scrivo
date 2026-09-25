@@ -99,10 +99,13 @@ VITE_FIREBASE_APP_ID=1:123456789:web:abcdef
 - [x] **Multi-workspace** (crea, gestisci e seleziona workspace)
 - [x] Creazione workspace
 - [x] **Collaborazione in tempo reale**
+- [x] **Editing collaborativo live** (stile Google Docs)
+- [x] **Salvataggio istantaneo** (ogni modifica sincronizzata)
+- [x] **Sincronizzazione realtime** con onSnapshot
 - [x] **Invito membri via email**
 - [x] **Gestione ruoli** (Owner, Editor, Viewer)
 - [x] **Presenza utenti** (vedi chi è online)
-- [x] **Indicatori di attività** (chi sta guardando la pagina)
+- [x] **Indicatori di attività** (chi sta guardando/modificando la pagina)
 - [x] Pagine nidificate (albero)
 - [x] Editor rich text (TipTap)
 - [x] Formattazione: grassetto, corsivo, sottolineatura, evidenziato
@@ -254,6 +257,35 @@ Quando vieni invitato in un workspace:
 - Aggiornamento ogni 30 secondi
 
 📖 **Guida completa**: Vedi [TEAM_COLLABORATION.md](./TEAM_COLLABORATION.md)
+
+## ✍️ Editing Collaborativo in Tempo Reale
+
+### Come Funziona (Stile Google Docs)
+L'editor supporta la collaborazione in tempo reale come Google Docs:
+
+1. **Salvataggio Istantaneo** ⚡
+   - Ogni modifica viene salvata immediatamente
+   - Gli altri utenti vedono le modifiche in tempo reale
+   - Nessuna perdita di dati
+
+2. **Sincronizzazione Live** 🔄
+   - Usa Firebase `onSnapshot` per aggiornamenti in tempo reale
+   - Sincronizzazione carattere per carattere
+   - Quando un utente modifica, tutti vedono subito
+
+3. **Indicatori Visivi** 👥
+   - Vedi chi sta modificando la pagina (avatar colorati)
+   - Indicatore "sta modificando..." sotto il titolo
+   - Avatar nella top bar degli utenti attivi
+
+### Come Testare
+1. Apri due browser (o browser + incognito)
+2. Accedi con due account diversi nello stesso workspace
+3. Apri la stessa pagina in entrambi i browser
+4. Inizia a scrivere in un browser
+5. Vedi le modifiche apparire istantaneamente nell'altro browser!
+
+📖 **Guida completa**: Vedi [REALTIME_EDITING.md](./REALTIME_EDITING.md)
 
 ## 🔒 Sicurezza
 

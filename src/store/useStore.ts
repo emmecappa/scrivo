@@ -1121,6 +1121,7 @@ export const useStore = create<AppState>((set, get) => ({
   saveBlocks: async (pageId, blocks) => {
     if (!isFirebaseConfigured || !db) return;
     
+    const { user } = get();
     const firestore = db;
     
     try {
@@ -1156,8 +1157,13 @@ export const useStore = create<AppState>((set, get) => ({
       
       set({ blocks });
       
+      // Update page with last edit info for real-time sync
       const pageRef = doc(firestore, 'pages', pageId);
-      await updateDoc(pageRef, { updated_at: serverTimestamp() });
+      await updateDoc(pageRef, { 
+        updated_at: serverTimestamp(),
+        last_edited_by: user?.id || null,
+        last_edited_at: serverTimestamp(),
+      });
     } catch (err: any) {
       console.error('❌ Save blocks error:', err);
     }
