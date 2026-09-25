@@ -8,7 +8,7 @@ export default function WorkspaceSetup() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [checking, setChecking] = useState(false);
-  const { createWorkspace, user, loadWorkspace, workspace } = useStore();
+  const { createWorkspace, user, loadWorkspaces, workspaces, workspace } = useStore();
 
   // Se il workspace viene caricato mentre siamo qui, redirect automatico
   useEffect(() => {
@@ -33,7 +33,7 @@ export default function WorkspaceSetup() {
       const currentWorkspace = useStore.getState().workspace;
       if (!currentWorkspace) {
         console.warn('⚠️ Workspace creato ma non caricato nello stato, forzo reload...');
-        await loadWorkspace();
+        await loadWorkspaces();
       }
     } catch (err: any) {
       console.error('❌ Errore creazione workspace:', err);
@@ -52,20 +52,22 @@ export default function WorkspaceSetup() {
       console.log('User ID:', user?.id);
       console.log('User Email:', user?.email);
       
-      await loadWorkspace();
+      await loadWorkspaces();
       
+      const currentWorkspaces = useStore.getState().workspaces;
       const currentWorkspace = useStore.getState().workspace;
       const currentPages = useStore.getState().pages;
       
       console.log('📊 Risultato verifica:', {
+        totalWorkspaces: currentWorkspaces.length,
         hasWorkspace: !!currentWorkspace,
         workspaceId: currentWorkspace?.id,
         pagesCount: currentPages.length
       });
       
-      if (currentWorkspace) {
+      if (currentWorkspaces.length > 0) {
         setError('');
-        console.log('✅ Workspace trovato!');
+        console.log(`✅ Trovati ${currentWorkspaces.length} workspace!`);
       } else {
         setError('Nessun workspace trovato per il tuo account. Verifica le regole di sicurezza Firestore.');
       }
@@ -139,7 +141,7 @@ export default function WorkspaceSetup() {
 
           <div className="mt-6 pt-6 border-t border-gray-100">
             <p className="text-xs text-gray-500 mb-3">
-              Hai già creato un workspace ma non lo vedi?
+              Hai già dei workspace?
             </p>
             <button
               onClick={handleCheckData}
@@ -154,7 +156,9 @@ export default function WorkspaceSetup() {
               ) : (
                 <>
                   <RefreshCw className="w-4 h-4" />
-                  Verifica dati esistenti
+                  {workspaces.length > 0 
+                    ? `Carica i tuoi ${workspaces.length} workspace` 
+                    : 'Verifica workspace esistenti'}
                 </>
               )}
             </button>
@@ -165,6 +169,7 @@ export default function WorkspaceSetup() {
               <p><strong>Debug Info:</strong></p>
               <p>User ID: {user?.id?.substring(0, 12)}...</p>
               <p>Email: {user?.email}</p>
+              <p>Workspace totali: {workspaces.length}</p>
               <p>Apri la console (F12) per vedere i log dettagliati</p>
             </div>
           </div>

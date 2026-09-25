@@ -15,6 +15,7 @@ import {
   PanelLeftClose,
   PanelLeft,
 } from 'lucide-react';
+import WorkspaceSelector from './WorkspaceSelector';
 
 function PageItem({ page, depth = 0 }: { page: Page; depth?: number }) {
   const { currentPageId, setCurrentPage, expandedPages, togglePageExpanded, createPage, updatePage, deletePage, pages } = useStore();
@@ -181,18 +182,15 @@ export default function Sidebar() {
 
   return (
     <div className="w-64 flex-shrink-0 border-r border-gray-200 bg-gray-50 flex flex-col h-full">
-      {/* Workspace Header */}
+      {/* Workspace Selector */}
       <div className="p-3 border-b border-gray-200">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <span className="text-lg">{workspace?.icon}</span>
-            <span className="font-semibold text-sm text-gray-800 truncate">
-              {workspace?.name}
-            </span>
+        <div className="flex items-center gap-2">
+          <div className="flex-1">
+            <WorkspaceSelector />
           </div>
           <button
             onClick={toggleSidebar}
-            className="p-1 hover:bg-gray-200 rounded-md transition"
+            className="p-1 hover:bg-gray-200 rounded-md transition flex-shrink-0"
             title="Chiudi sidebar"
           >
             <PanelLeftClose className="w-4 h-4 text-gray-500" />
