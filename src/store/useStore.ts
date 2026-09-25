@@ -23,6 +23,7 @@ import {
   Timestamp,
   onSnapshot,
   writeBatch,
+  Unsubscribe,
 } from 'firebase/firestore';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -39,6 +40,18 @@ export interface Workspace {
   icon: string;
   created_by: string;
   created_at: string;
+}
+
+export interface WorkspaceMember {
+  id: string;
+  workspace_id: string;
+  user_id: string;
+  email: string;
+  full_name: string;
+  role: 'owner' | 'editor' | 'viewer';
+  status: 'active' | 'invited';
+  invited_at: string;
+  joined_at: string | null;
 }
 
 export interface Page {
@@ -65,6 +78,15 @@ export interface Block {
   parent_id: string | null;
 }
 
+export interface ActiveUser {
+  userId: string;
+  email: string;
+  fullName: string;
+  pageId: string | null;
+  lastSeen: number;
+  color: string;
+}
+
 interface AppState {
   // Config
   isConfigured: boolean;
@@ -79,6 +101,10 @@ interface AppState {
   workspace: Workspace | null;
   workspaceLoading: boolean;
   
+  // Members
+  members: WorkspaceMember[];
+  activeUsers: ActiveUser[];
+  
   // Pages
   pages: Page[];
   currentPageId: string | null;
@@ -90,6 +116,11 @@ interface AppState {
   // UI
   sidebarOpen: boolean;
   isCreatingPage: boolean;
+  showMembersPanel: boolean;
+  
+  // Realtime subscriptions
+  membersUnsubscribe: Unsubscribe | null;
+  activeUsersUnsubscribe: Unsubscribe | null;
   
   // Actions
   login: (email: string, password: string) => Promise<void>;
@@ -100,6 +131,18 @@ interface AppState {
   loadWorkspace: () => Promise<void>;
   createWorkspace: (name: string) => Promise<void>;
   
+  // Members
+  loadMembers: () => Promise<void>;
+  inviteMember: (email: string, role: 'editor' | 'viewer') => Promise<void>;
+  updateMemberRole: (memberId: string, role: 'owner' | 'editor' | 'viewer') => Promise<void>;
+  removeMember: (memberId: string) => Promise<void>;
+  acceptInvitation: (memberId: string) => Promise<void>;
+  
+  // Active users (presence)
+  subscribeToActiveUsers: () => void;
+  updatePresence: (pageId: string | null) => void;
+  
+  // Pages
   loadPages: () => Promise<void>;
   createPage: (parentId?: string | null) => Promise<string>;
   updatePage: (id: string, updates: Partial<Page>) => Promise<void>;
@@ -107,10 +150,12 @@ interface AppState {
   setCurrentPage: (id: string | null) => void;
   togglePageExpanded: (id: string) => void;
   
+  // Blocks
   loadBlocks: (pageId: string) => Promise<void>;
   saveBlocks: (pageId: string, blocks: Block[]) => Promise<void>;
   
   toggleSidebar: () => void;
+  toggleMembersPanel: () => void;
 }
 
 // Helper per convertire Timestamp Firestore in stringa ISO
@@ -121,6 +166,9 @@ const timestampToString = (ts: any): string => {
   return new Date().toISOString();
 };
 
+// Colori per gli utenti attivi
+const USER_COLORS = ['#3B82F6', '#EF4444', '#10B981', '#F59E0B', '#8B5CF6', '#EC4899', '#6366F1', '#14B8A6'];
+
 export const useStore = create<AppState>((set, get) => ({
   isConfigured: isFirebaseConfigured,
   user: null,
@@ -129,12 +177,17 @@ export const useStore = create<AppState>((set, get) => ({
   authError: null,
   workspace: null,
   workspaceLoading: false,
+  members: [],
+  activeUsers: [],
   pages: [],
   currentPageId: null,
   expandedPages: new Set(),
   blocks: [],
   sidebarOpen: true,
   isCreatingPage: false,
+  showMembersPanel: false,
+  membersUnsubscribe: null,
+  activeUsersUnsubscribe: null,
 
   login: async (email, password) => {
     if (!isFirebaseConfigured || !auth) {
@@ -171,21 +224,17 @@ export const useStore = create<AppState>((set, get) => ({
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
       const fbUser = userCredential.user;
       
-      // Aggiorna il displayName
       if (fbUser) {
         await updateProfile(fbUser, { displayName: fullName });
       }
       
-      // Invia email di verifica (opzionale, non blocca l'accesso)
       try {
         const { sendEmailVerification } = await import('firebase/auth');
         if (auth && fbUser) {
           await sendEmailVerification(fbUser);
-          console.log('Email di verifica inviata');
         }
       } catch (emailErr) {
         console.warn('Impossibile inviare email di verifica:', emailErr);
-        // Non blocchiamo la registrazione se l'email non viene inviata
       }
       
       set({
@@ -200,7 +249,6 @@ export const useStore = create<AppState>((set, get) => ({
         workspaceLoading: true,
       });
       
-      // Carica il workspace (se esiste)
       await get().loadWorkspace();
     } catch (err: any) {
       console.error('Signup error:', err);
@@ -209,6 +257,22 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   logout: async () => {
+    // Rimuovi presenza utente prima del logout
+    const { user, workspace } = get();
+    if (user && workspace && isFirebaseConfigured && db) {
+      try {
+        const presenceRef = doc(db, 'active_users', `${workspace.id}_${user.id}`);
+        await deleteDoc(presenceRef);
+      } catch (err) {
+        console.error('Error removing presence:', err);
+      }
+    }
+    
+    // Cleanup subscriptions
+    const { membersUnsubscribe, activeUsersUnsubscribe } = get();
+    if (membersUnsubscribe) membersUnsubscribe();
+    if (activeUsersUnsubscribe) activeUsersUnsubscribe();
+    
     if (isFirebaseConfigured && auth) {
       await signOut(auth);
     }
@@ -218,7 +282,11 @@ export const useStore = create<AppState>((set, get) => ({
       workspace: null, 
       pages: [], 
       currentPageId: null, 
-      blocks: [] 
+      blocks: [],
+      members: [],
+      activeUsers: [],
+      membersUnsubscribe: null,
+      activeUsersUnsubscribe: null,
     });
   },
 
@@ -251,7 +319,6 @@ export const useStore = create<AppState>((set, get) => ({
             workspaceLoading: true,
           });
           
-          // Attendi un momento per assicurarti che lo stato sia aggiornato
           await new Promise(r => setTimeout(r, 100));
           
           console.log('📂 Caricamento workspace...');
@@ -262,7 +329,6 @@ export const useStore = create<AppState>((set, get) => ({
         }
         
         resolve();
-        // Unsubscribe dopo la prima chiamata per evitare loop
         unsubscribe();
       });
     });
@@ -289,7 +355,6 @@ export const useStore = create<AppState>((set, get) => ({
       console.log('📊 Workspace query result:', { 
         empty: snapshot.empty, 
         size: snapshot.size,
-        docs: snapshot.docs.map(d => ({ id: d.id, data: d.data() }))
       });
       
       if (!snapshot.empty) {
@@ -311,24 +376,20 @@ export const useStore = create<AppState>((set, get) => ({
         
         console.log('📄 Caricamento pagine...');
         await get().loadPages();
+        
+        // Carica membri e subscribi al realtime
+        await get().loadMembers();
+        get().subscribeToActiveUsers();
       } else {
         console.log('⚠️ No workspace found for user - showing workspace creation screen');
         set({ workspaceLoading: false });
       }
     } catch (err: any) {
       console.error('❌ Load workspace error:', err);
-      console.error('Error details:', {
-        code: err.code,
-        message: err.message,
-        name: err.name
-      });
-      
       set({ workspaceLoading: false });
       
-      // Se è un errore di permessi, mostra un messaggio chiaro
       if (err.code === 'permission-denied') {
         console.error('🚫 ERRORE PERMESSI: Aggiorna le regole di sicurezza Firestore!');
-        console.error('Vai su Firebase Console → Firestore Database → Rules e aggiorna le regole');
       }
     }
   },
@@ -336,45 +397,34 @@ export const useStore = create<AppState>((set, get) => ({
   createWorkspace: async (name) => {
     const { user } = get();
     if (!user || !isFirebaseConfigured || !db) {
-      console.error('❌ Create workspace: missing prerequisites', { hasUser: !!user, isConfigured: isFirebaseConfigured, hasDb: !!db });
+      console.error('❌ Create workspace: missing prerequisites');
       throw new Error('Configurazione incompleta');
     }
     
     try {
-      console.log('🏗️ Creating workspace:', name, 'for user:', user.id, user.email);
+      console.log('🏗️ Creating workspace:', name, 'for user:', user.id);
       
-      const workspaceData = {
+      const workspaceRef = await addDoc(collection(db, 'workspaces'), {
         name,
         icon: '📝',
         created_by: user.id,
         created_at: serverTimestamp(),
         updated_at: serverTimestamp(),
-      };
-      
-      console.log('📝 Workspace data:', workspaceData);
-      
-      const workspaceRef = await addDoc(collection(db, 'workspaces'), workspaceData);
+      });
       
       console.log('✅ Workspace created with ID:', workspaceRef.id);
-      
-      // Verify the workspace was actually saved
-      const verifyDoc = await getDoc(workspaceRef);
-      if (!verifyDoc.exists()) {
-        throw new Error('Workspace non è stato salvato correttamente in Firestore');
-      }
-      
-      console.log('✅ Workspace verified in Firestore:', verifyDoc.data());
       
       // Add creator as owner member
       await addDoc(collection(db, 'workspace_members'), {
         workspace_id: workspaceRef.id,
         user_id: user.id,
+        email: user.email,
+        full_name: user.full_name,
         role: 'owner',
+        status: 'active',
         invited_at: serverTimestamp(),
         joined_at: serverTimestamp(),
       });
-      
-      console.log('✅ Workspace member added');
       
       set({
         workspace: {
@@ -386,42 +436,242 @@ export const useStore = create<AppState>((set, get) => ({
         }
       });
       
-      console.log('✅ Workspace set in state');
-      
-      // Create initial page
-      console.log('📄 Creating initial page...');
       await get().createPage();
-      console.log('✅ Initial page created');
-      
-      // Reload pages to ensure they're in state
-      await get().loadPages();
-      console.log('✅ Pages reloaded');
+      await get().loadMembers();
+      get().subscribeToActiveUsers();
       
     } catch (err: any) {
       console.error('❌ Create workspace error:', err);
-      console.error('Error details:', {
-        code: err.code,
-        message: err.message,
-        name: err.name
+      throw err;
+    }
+  },
+
+  loadMembers: async () => {
+    const { workspace } = get();
+    if (!workspace || !isFirebaseConfigured || !db) return;
+    
+    try {
+      console.log('👥 Loading members for workspace:', workspace.id);
+      
+      // Cleanup previous subscription
+      const { membersUnsubscribe } = get();
+      if (membersUnsubscribe) membersUnsubscribe();
+      
+      // Subscribe to realtime updates
+      const q = query(
+        collection(db, 'workspace_members'),
+        where('workspace_id', '==', workspace.id)
+      );
+      
+      const unsubscribe = onSnapshot(q, (snapshot) => {
+        const members: WorkspaceMember[] = snapshot.docs.map(docSnap => {
+          const data = docSnap.data();
+          return {
+            id: docSnap.id,
+            workspace_id: data.workspace_id || '',
+            user_id: data.user_id || '',
+            email: data.email || '',
+            full_name: data.full_name || '',
+            role: data.role || 'viewer',
+            status: data.status || 'invited',
+            invited_at: timestampToString(data.invited_at),
+            joined_at: data.joined_at ? timestampToString(data.joined_at) : null,
+          };
+        });
+        
+        console.log('✅ Members loaded:', members.length, members);
+        set({ members });
       });
       
-      if (err.code === 'permission-denied') {
-        throw new Error('Permessi negati. Aggiorna le regole di sicurezza Firestore!');
-      }
+      set({ membersUnsubscribe: unsubscribe });
+    } catch (err) {
+      console.error('❌ Load members error:', err);
+    }
+  },
+
+  inviteMember: async (email, role) => {
+    const { workspace, user, members } = get();
+    if (!workspace || !user || !isFirebaseConfigured || !db) return;
+    
+    // Check if user is owner
+    const currentUserMember = members.find(m => m.user_id === user.id);
+    if (!currentUserMember || currentUserMember.role !== 'owner') {
+      throw new Error('Solo il proprietario può invitare membri');
+    }
+    
+    // Check if already invited
+    const existingMember = members.find(m => m.email === email);
+    if (existingMember) {
+      throw new Error('Questo utente è già stato invitato o è già membro');
+    }
+    
+    try {
+      console.log('📧 Inviting member:', email, 'with role:', role);
       
+      await addDoc(collection(db, 'workspace_members'), {
+        workspace_id: workspace.id,
+        user_id: '', // Will be filled when user accepts
+        email,
+        full_name: '',
+        role,
+        status: 'invited',
+        invited_at: serverTimestamp(),
+        joined_at: null,
+      });
+      
+      console.log('✅ Invitation sent');
+      
+      // TODO: Send invitation email via Firebase Cloud Functions
+    } catch (err: any) {
+      console.error('❌ Invite member error:', err);
       throw err;
+    }
+  },
+
+  updateMemberRole: async (memberId, role) => {
+    const { user, members } = get();
+    if (!isFirebaseConfigured || !db) return;
+    
+    // Check if user is owner
+    const currentUserMember = members.find(m => m.user_id === user?.id);
+    if (!currentUserMember || currentUserMember.role !== 'owner') {
+      throw new Error('Solo il proprietario può modificare i ruoli');
+    }
+    
+    try {
+      const memberRef = doc(db, 'workspace_members', memberId);
+      await updateDoc(memberRef, { role });
+      console.log('✅ Member role updated');
+    } catch (err: any) {
+      console.error('❌ Update member role error:', err);
+      throw err;
+    }
+  },
+
+  removeMember: async (memberId) => {
+    const { user, members } = get();
+    if (!isFirebaseConfigured || !db) return;
+    
+    // Check if user is owner
+    const currentUserMember = members.find(m => m.user_id === user?.id);
+    if (!currentUserMember || currentUserMember.role !== 'owner') {
+      throw new Error('Solo il proprietario può rimuovere membri');
+    }
+    
+    try {
+      const memberRef = doc(db, 'workspace_members', memberId);
+      await deleteDoc(memberRef);
+      console.log('✅ Member removed');
+    } catch (err: any) {
+      console.error('❌ Remove member error:', err);
+      throw err;
+    }
+  },
+
+  acceptInvitation: async (memberId) => {
+    const { user } = get();
+    if (!user || !isFirebaseConfigured || !db) return;
+    
+    try {
+      const memberRef = doc(db, 'workspace_members', memberId);
+      await updateDoc(memberRef, {
+        user_id: user.id,
+        full_name: user.full_name,
+        status: 'active',
+        joined_at: serverTimestamp(),
+      });
+      console.log('✅ Invitation accepted');
+    } catch (err: any) {
+      console.error('❌ Accept invitation error:', err);
+      throw err;
+    }
+  },
+
+  subscribeToActiveUsers: () => {
+    const { workspace } = get();
+    if (!workspace || !isFirebaseConfigured || !db) return;
+    
+    // Cleanup previous subscription
+    const { activeUsersUnsubscribe } = get();
+    if (activeUsersUnsubscribe) activeUsersUnsubscribe();
+    
+    // Subscribe to active users in this workspace
+    const q = query(
+      collection(db, 'active_users'),
+      where('workspace_id', '==', workspace.id)
+    );
+    
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const activeUsers: ActiveUser[] = snapshot.docs.map(docSnap => {
+        const data = docSnap.data();
+        return {
+          userId: data.user_id || '',
+          email: data.email || '',
+          fullName: data.full_name || '',
+          pageId: data.page_id || null,
+          lastSeen: data.last_seen || Date.now(),
+          color: data.color || USER_COLORS[0],
+        };
+      });
+      
+      // Filter out users who haven't been seen in the last 30 seconds
+      const now = Date.now();
+      const filteredUsers = activeUsers.filter(u => now - u.lastSeen < 30000);
+      
+      set({ activeUsers: filteredUsers });
+    });
+    
+    set({ activeUsersUnsubscribe: unsubscribe });
+  },
+
+  updatePresence: async (pageId) => {
+    const { user, workspace } = get();
+    if (!user || !workspace || !isFirebaseConfigured || !db) return;
+    
+    try {
+      const presenceId = `${workspace.id}_${user.id}`;
+      const presenceRef = doc(db, 'active_users', presenceId);
+      
+      // Get or create user color
+      const { activeUsers } = get();
+      const existingUser = activeUsers.find(u => u.userId === user.id);
+      const color = existingUser?.color || USER_COLORS[activeUsers.length % USER_COLORS.length];
+      
+      await updateDoc(presenceRef, {
+        workspace_id: workspace.id,
+        user_id: user.id,
+        email: user.email,
+        full_name: user.full_name,
+        page_id: pageId,
+        last_seen: Date.now(),
+        color,
+      }).catch(async () => {
+        // If document doesn't exist, create it
+        const { setDoc } = await import('firebase/firestore');
+        await setDoc(presenceRef, {
+          workspace_id: workspace.id,
+          user_id: user.id,
+          email: user.email,
+          full_name: user.full_name,
+          page_id: pageId,
+          last_seen: Date.now(),
+          color,
+        });
+      });
+    } catch (err) {
+      console.error('Error updating presence:', err);
     }
   },
 
   loadPages: async () => {
     const { workspace } = get();
     if (!workspace || !isFirebaseConfigured || !db) {
-      console.log('Load pages: skipped -', { hasWorkspace: !!workspace });
+      console.log('⚠️ Load pages: skipped -', { hasWorkspace: !!workspace });
       return;
     }
     
     try {
-      console.log('Loading pages for workspace:', workspace.id);
+      console.log('📄 Loading pages for workspace:', workspace.id);
       
       const q = query(
         collection(db, 'pages'),
@@ -431,7 +681,7 @@ export const useStore = create<AppState>((set, get) => ({
       );
       
       const snapshot = await getDocs(q);
-      console.log('Pages query result:', { empty: snapshot.empty, size: snapshot.size });
+      console.log('📊 Pages query result:', { empty: snapshot.empty, size: snapshot.size });
       
       const pages: Page[] = snapshot.docs.map(docSnap => {
         const data = docSnap.data();
@@ -451,10 +701,10 @@ export const useStore = create<AppState>((set, get) => ({
         };
       });
       
-      console.log('Pages loaded:', pages.length);
+      console.log('✅ Pages loaded:', pages.length);
       set({ pages });
     } catch (err) {
-      console.error('Load pages error:', err);
+      console.error('❌ Load pages error:', err);
     }
   },
 
@@ -480,7 +730,6 @@ export const useStore = create<AppState>((set, get) => ({
         is_favorite: false,
       });
       
-      // Create initial empty block
       await addDoc(collection(db, 'blocks'), {
         page_id: pageRef.id,
         type: 'paragraph',
@@ -519,7 +768,7 @@ export const useStore = create<AppState>((set, get) => ({
       
       return pageRef.id;
     } catch (err) {
-      console.error('Create page error:', err);
+      console.error('❌ Create page error:', err);
       throw err;
     }
   },
@@ -534,7 +783,6 @@ export const useStore = create<AppState>((set, get) => ({
         updated_at: serverTimestamp(),
       });
       
-      // Update local state immediately
       set({
         pages: get().pages.map(p => 
           p.id === id 
@@ -543,7 +791,7 @@ export const useStore = create<AppState>((set, get) => ({
         )
       });
     } catch (err) {
-      console.error('Update page error:', err);
+      console.error('❌ Update page error:', err);
     }
   },
 
@@ -568,11 +816,15 @@ export const useStore = create<AppState>((set, get) => ({
         )
       });
     } catch (err) {
-      console.error('Delete page error:', err);
+      console.error('❌ Delete page error:', err);
     }
   },
 
-  setCurrentPage: (id) => set({ currentPageId: id }),
+  setCurrentPage: (id) => {
+    set({ currentPageId: id });
+    // Update presence
+    get().updatePresence(id);
+  },
 
   togglePageExpanded: (id) => {
     const expanded = new Set(get().expandedPages);
@@ -600,7 +852,6 @@ export const useStore = create<AppState>((set, get) => ({
       console.log('📊 Blocks query result:', { 
         empty: snapshot.empty, 
         size: snapshot.size,
-        docs: snapshot.docs.map(d => ({ id: d.id, data: d.data() }))
       });
       
       const blocks: Block[] = snapshot.docs.map(docSnap => {
@@ -615,44 +866,32 @@ export const useStore = create<AppState>((set, get) => ({
         };
       });
       
-      console.log('✅ Blocks loaded:', blocks.length, blocks);
+      console.log('✅ Blocks loaded:', blocks.length);
       set({ blocks });
     } catch (err: any) {
       console.error('❌ Load blocks error:', err);
-      console.error('Error details:', {
-        code: err.code,
-        message: err.message,
-        name: err.name
-      });
-      
-      if (err.code === 'permission-denied') {
-        console.error('🚫 ERRORE PERMESSI: Aggiorna le regole di sicurezza Firestore!');
-      }
     }
   },
 
   saveBlocks: async (pageId, blocks) => {
     if (!isFirebaseConfigured || !db) return;
     
-    const firestore = db; // Type narrowing
+    const firestore = db;
     
     try {
       console.log('💾 Saving blocks for page:', pageId, 'blocks count:', blocks.length);
       
-      // Delete existing blocks
       const q = query(
         collection(firestore, 'blocks'),
         where('page_id', '==', pageId)
       );
       const snapshot = await getDocs(q);
-      console.log('🗑️ Deleting existing blocks:', snapshot.size);
       
       const batch = writeBatch(firestore);
       snapshot.docs.forEach(docSnap => {
         batch.delete(docSnap.ref);
       });
       
-      // Insert new blocks
       blocks.forEach((block, index) => {
         const blockId = uuidv4();
         const blockRef = doc(firestore, 'blocks', blockId);
@@ -672,23 +911,13 @@ export const useStore = create<AppState>((set, get) => ({
       
       set({ blocks });
       
-      // Update page timestamp
       const pageRef = doc(firestore, 'pages', pageId);
       await updateDoc(pageRef, { updated_at: serverTimestamp() });
-      console.log('✅ Page timestamp updated');
     } catch (err: any) {
       console.error('❌ Save blocks error:', err);
-      console.error('Error details:', {
-        code: err.code,
-        message: err.message,
-        name: err.name
-      });
-      
-      if (err.code === 'permission-denied') {
-        console.error('🚫 ERRORE PERMESSI: Aggiorna le regole di sicurezza Firestore!');
-      }
     }
   },
 
   toggleSidebar: () => set({ sidebarOpen: !get().sidebarOpen }),
+  toggleMembersPanel: () => set({ showMembersPanel: !get().showMembersPanel }),
 }));
