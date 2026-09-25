@@ -173,6 +173,18 @@ export const useStore = create<AppState>((set, get) => ({
         await updateProfile(fbUser, { displayName: fullName });
       }
       
+      // Invia email di verifica (opzionale, non blocca l'accesso)
+      try {
+        const { sendEmailVerification } = await import('firebase/auth');
+        if (auth && fbUser) {
+          await sendEmailVerification(fbUser);
+          console.log('Email di verifica inviata');
+        }
+      } catch (emailErr) {
+        console.warn('Impossibile inviare email di verifica:', emailErr);
+        // Non blocchiamo la registrazione se l'email non viene inviata
+      }
+      
       set({
         user: {
           id: fbUser.uid,
@@ -183,6 +195,9 @@ export const useStore = create<AppState>((set, get) => ({
         isAuthenticated: true,
         authError: null,
       });
+      
+      // Carica il workspace (se esiste)
+      await get().loadWorkspace();
     } catch (err: any) {
       console.error('Signup error:', err);
       throw new Error(err.message || 'Errore di registrazione');
@@ -234,19 +249,27 @@ export const useStore = create<AppState>((set, get) => ({
 
   loadWorkspace: async () => {
     const { user } = get();
-    if (!user || !isFirebaseConfigured || !db) return;
+    if (!user || !isFirebaseConfigured || !db) {
+      console.log('Load workspace: skipped -', { hasUser: !!user, isConfigured: isFirebaseConfigured, hasDb: !!db });
+      return;
+    }
     
     try {
+      console.log('Loading workspace for user:', user.id);
+      
       const q = query(
         collection(db, 'workspaces'),
         where('created_by', '==', user.id)
       );
       
       const snapshot = await getDocs(q);
+      console.log('Workspace query result:', { empty: snapshot.empty, size: snapshot.size });
       
       if (!snapshot.empty) {
         const docSnap = snapshot.docs[0];
         const data = docSnap.data();
+        
+        console.log('Workspace found:', docSnap.id, data);
         
         set({
           workspace: {
@@ -259,6 +282,8 @@ export const useStore = create<AppState>((set, get) => ({
         });
         
         await get().loadPages();
+      } else {
+        console.log('No workspace found for user');
       }
     } catch (err) {
       console.error('Load workspace error:', err);
@@ -267,9 +292,14 @@ export const useStore = create<AppState>((set, get) => ({
 
   createWorkspace: async (name) => {
     const { user } = get();
-    if (!user || !isFirebaseConfigured || !db) return;
+    if (!user || !isFirebaseConfigured || !db) {
+      console.error('Create workspace: missing prerequisites', { hasUser: !!user, isConfigured: isFirebaseConfigured, hasDb: !!db });
+      return;
+    }
     
     try {
+      console.log('Creating workspace:', name, 'for user:', user.id);
+      
       const workspaceRef = await addDoc(collection(db, 'workspaces'), {
         name,
         icon: '📝',
@@ -277,6 +307,8 @@ export const useStore = create<AppState>((set, get) => ({
         created_at: serverTimestamp(),
         updated_at: serverTimestamp(),
       });
+      
+      console.log('Workspace created with ID:', workspaceRef.id);
       
       // Add creator as owner member
       await addDoc(collection(db, 'workspace_members'), {
@@ -297,8 +329,11 @@ export const useStore = create<AppState>((set, get) => ({
         }
       });
       
+      console.log('Workspace set in state');
+      
       // Create initial page
       await get().createPage();
+      console.log('Initial page created');
     } catch (err) {
       console.error('Create workspace error:', err);
       throw err;
@@ -307,9 +342,14 @@ export const useStore = create<AppState>((set, get) => ({
 
   loadPages: async () => {
     const { workspace } = get();
-    if (!workspace || !isFirebaseConfigured || !db) return;
+    if (!workspace || !isFirebaseConfigured || !db) {
+      console.log('Load pages: skipped -', { hasWorkspace: !!workspace });
+      return;
+    }
     
     try {
+      console.log('Loading pages for workspace:', workspace.id);
+      
       const q = query(
         collection(db, 'pages'),
         where('workspace_id', '==', workspace.id),
@@ -318,6 +358,8 @@ export const useStore = create<AppState>((set, get) => ({
       );
       
       const snapshot = await getDocs(q);
+      console.log('Pages query result:', { empty: snapshot.empty, size: snapshot.size });
+      
       const pages: Page[] = snapshot.docs.map(docSnap => {
         const data = docSnap.data();
         return {
@@ -336,6 +378,7 @@ export const useStore = create<AppState>((set, get) => ({
         };
       });
       
+      console.log('Pages loaded:', pages.length);
       set({ pages });
     } catch (err) {
       console.error('Load pages error:', err);

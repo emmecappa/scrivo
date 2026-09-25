@@ -22,12 +22,37 @@
 - Nella tab **"Sign-in method"** → abilita **"Email/Password"**
 - Salva
 
+**⚠️ IMPORTANTE - Disabilita verifica email (consigliato per test):**
+- Nella tab **"Settings"** (sempre in Authentication)
+- Trova **"User actions"** o **"Email action URLs"**
+- **Disabilita** l'opzione "Require email verification" / "Richiedi verifica email"
+- Questo permette agli utenti di accedere subito senza confermare l'email
+- Se vuoi mantenere la verifica email, l'app invierà automaticamente l'email di verifica dopo la registrazione
+
 ### 1c. Crea il Firestore Database
 - Nel menu laterale → **Build → Firestore Database**
 - Clicca **"Create database"**
 - Scegli **"Start in test mode"** (per iniziare, poi potrai aggiungere regole di sicurezza)
 - Seleziona la region più vicina a te (es: `eur3` per Europa)
 - Clicca **"Enable"**
+
+**⚠️ IMPORTANTE - Regole di sicurezza:**
+- Dopo aver creato il database, vai su **Firestore → Rules**
+- Sostituisci le regole con queste (permettono agli utenti autenticati di leggere/scrivere):
+
+```
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if request.auth != null;
+    }
+  }
+}
+```
+
+- Clicca **"Publish"**
+- **Senza queste regole, i tuoi dati non saranno visibili!**
 
 ### 1d. Registra l'app Web
 - Vai su **Project Settings** (icona ingranaggio in alto a sinistra)
@@ -90,11 +115,23 @@ VITE_FIREBASE_APP_ID=1:123456789:web:abcdef
 
 ## 🔧 Risoluzione problemi
 
-### "Firebase non configurato"
-→ Controlla che tutte le 6 variabili `VITE_FIREBASE_*` siano presenti nel file `.env` o nelle env variables di Vercel
+### ❌ Non ricevo l'email di conferma
+**Soluzione rapida:** Disabilita la verifica email in Firebase Console:
+1. Vai su **Authentication → Settings**
+2. Disabilita "Require email verification" / "Richiedi verifica email"
+3. Ora gli utenti possono accedere subito senza confermare l'email
 
-### "Missing or insufficient permissions"
-→ Firestore è in modalità production. Vai su Firestore → Rules e imposta:
+**Alternativa:** Se vuoi mantenere la verifica email:
+- Dopo la registrazione, controlla la cartella spam
+- Clicca su "Invia di nuovo l'email" nella schermata di conferma
+- Verifica che in **Authentication → Templates** l'email sia configurata correttamente
+
+### ❌ Dopo il login non vedo i miei dati
+**Causa più probabile:** Le regole di sicurezza Firestore stanno bloccando l'accesso.
+
+**Soluzione:**
+1. Vai su **Firestore Database → Rules**
+2. Incolla queste regole:
 ```
 rules_version = '2';
 service cloud.firestore {
@@ -105,15 +142,34 @@ service cloud.firestore {
   }
 }
 ```
+3. Clicca **"Publish"**
+4. Ricarica la pagina
 
-### "auth/email-already-in-use"
+**Altre cause possibili:**
+- Controlla la console del browser (F12) per vedere errori
+- Verifica che le variabili d'ambiente siano corrette
+- Prova a creare un nuovo workspace da zero
+
+### ❌ "Firebase non configurato"
+→ Controlla che tutte le 6 variabili `VITE_FIREBASE_*` siano presenti nel file `.env` o nelle env variables di Vercel
+
+### ❌ "Missing or insufficient permissions"
+→ Vedi sopra: aggiorna le regole Firestore
+
+### ❌ "auth/email-already-in-use"
 → L'email è già registrata. Usa un'altra email o resetta la password.
 
-### "auth/invalid-email"
+### ❌ "auth/invalid-email"
 → Controlla che l'email sia valida.
 
-### L'app non carica dopo il deploy
+### ❌ L'app non carica dopo il deploy
 → Assicurati di aver aggiunto TUTTE le 6 variabili d'ambiente su Vercel e di aver fatto un nuovo deploy.
+
+### ❌ I dati spariscono dopo il logout
+→ Questo è normale: i dati sono salvati in Firestore e vengono ricaricati al login. Se non li vedi:
+1. Controlla le regole Firestore (vedi sopra)
+2. Apri la console del browser (F12) e cerca errori
+3. Verifica che il workspace sia stato creato correttamente in Firestore
 
 ---
 

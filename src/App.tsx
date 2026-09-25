@@ -11,8 +11,9 @@ import { motion } from 'framer-motion';
 type ViewMode = 'document' | 'diagram';
 
 function MainLayout() {
-  const { workspace, currentPageId, pages } = useStore();
+  const { workspace, currentPageId, pages, user, blocks } = useStore();
   const [viewMode, setViewMode] = useState<ViewMode>('document');
+  const [showDebug, setShowDebug] = useState(false);
   
   const currentPage = pages.find(p => p.id === currentPageId);
 
@@ -58,7 +59,36 @@ function MainLayout() {
               <span className="text-gray-700">{currentPage.title || 'Senza titolo'}</span>
             </div>
           )}
+
+          {/* Debug button */}
+          <button
+            onClick={() => setShowDebug(!showDebug)}
+            className="text-xs text-gray-400 hover:text-gray-600 px-2 py-1 rounded transition"
+            title="Mostra info debug"
+          >
+            🐛
+          </button>
         </div>
+
+        {/* Debug panel */}
+        {showDebug && (
+          <div className="absolute top-12 right-4 bg-gray-900 text-green-400 p-4 rounded-lg shadow-xl z-50 text-xs font-mono max-w-md max-h-96 overflow-auto">
+            <div className="flex justify-between items-center mb-2">
+              <span className="font-bold text-white">🐛 Debug Info</span>
+              <button onClick={() => setShowDebug(false)} className="text-gray-400 hover:text-white">✕</button>
+            </div>
+            <div className="space-y-2">
+              <div><span className="text-gray-400">User:</span> {user?.email || 'null'}</div>
+              <div><span className="text-gray-400">User ID:</span> {user?.id || 'null'}</div>
+              <div><span className="text-gray-400">Workspace:</span> {workspace?.name || 'null'} ({workspace?.id?.substring(0, 8) || 'null'})</div>
+              <div><span className="text-gray-400">Pages:</span> {pages.length}</div>
+              <div><span className="text-gray-400">Current Page:</span> {currentPageId?.substring(0, 8) || 'null'}</div>
+              <div><span className="text-gray-400">Blocks:</span> {blocks.length}</div>
+              <hr className="border-gray-700 my-2" />
+              <div className="text-gray-400">Console: Apri F12 → Console per vedere i log dettagliati</div>
+            </div>
+          </div>
+        )}
 
         {/* Content */}
         <div className="flex-1 overflow-hidden">
