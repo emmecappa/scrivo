@@ -135,12 +135,12 @@ export default function DiagramCanvas() {
     // Debounce save (500ms)
     saveTimeoutRef.current = setTimeout(async () => {
       try {
-        const data = JSON.stringify({ shapes: newShapes, connections: newConnections });
+        const diagramData = JSON.stringify({ shapes: newShapes, connections: newConnections });
         console.log('💾 Saving diagram:', newShapes.length, 'shapes');
         
         const pageRef = doc(db, 'pages', currentPageId);
         await setDoc(pageRef, { 
-          diagram_ data,
+          diagram_ diagramData,
           updated_at: new Date().toISOString()
         }, { merge: true });
         
