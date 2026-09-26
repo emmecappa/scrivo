@@ -74,18 +74,15 @@ export default function DiagramCanvas() {
   const unsubscribeRef = useRef<Unsubscribe | null>(null);
   const isRemoteUpdateRef = useRef(false);
 
-  // Load diagram data with realtime listener
   useEffect(() => {
     if (!currentPageId || !isFirebaseConfigured || !db) return;
 
     console.log('🔄 Setting up realtime listener for page:', currentPageId);
 
-    // Cleanup previous listener
     if (unsubscribeRef.current) {
       unsubscribeRef.current();
     }
 
-    // Listen to page changes in realtime
     unsubscribeRef.current = onSnapshot(
       doc(db, 'pages', currentPageId),
       (snapshot) => {
@@ -117,22 +114,18 @@ export default function DiagramCanvas() {
     };
   }, [currentPageId]);
 
-  // Save diagram data directly to Firestore
   const saveDiagram = useCallback((newShapes: DiagramShape[], newConnections: Connection[]) => {
     if (!currentPageId || !isFirebaseConfigured || !db) {
       console.error('❌ Cannot save: missing prerequisites');
       return;
     }
 
-    // Clear previous timeout
     if (saveTimeoutRef.current) {
       clearTimeout(saveTimeoutRef.current);
     }
 
-    // Set flag to prevent remote update loop
     isRemoteUpdateRef.current = true;
 
-    // Debounce save (500ms)
     saveTimeoutRef.current = setTimeout(async () => {
       try {
         const diagramData = JSON.stringify({ shapes: newShapes, connections: newConnections });
@@ -140,13 +133,12 @@ export default function DiagramCanvas() {
         
         const pageRef = doc(db, 'pages', currentPageId);
         await setDoc(pageRef, { 
-          diagram_ diagramData,
+          diagram_data: diagramData,
           updated_at: new Date().toISOString()
         }, { merge: true });
         
         console.log('✅ Diagram saved successfully');
         
-        // Reset flag after a short delay
         setTimeout(() => {
           isRemoteUpdateRef.current = false;
         }, 100);
@@ -157,7 +149,6 @@ export default function DiagramCanvas() {
     }, 500);
   }, [currentPageId]);
 
-  // Draw on canvas
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -171,15 +162,12 @@ export default function DiagramCanvas() {
     canvas.height = rect.height * dpr;
     ctx.scale(dpr, dpr);
 
-    // Clear
     ctx.clearRect(0, 0, rect.width, rect.height);
     
-    // Save context and apply transformations
     ctx.save();
     ctx.translate(pan.x, pan.y);
     ctx.scale(zoom, zoom);
     
-    // Draw grid
     ctx.strokeStyle = '#f0f0f0';
     ctx.lineWidth = 0.5;
     const gridSize = 20;
@@ -201,7 +189,6 @@ export default function DiagramCanvas() {
       ctx.stroke();
     }
 
-    // Draw connections
     connections.forEach(conn => {
       const fromShape = shapes.find(s => s.id === conn.from);
       const toShape = shapes.find(s => s.id === conn.to);
@@ -228,7 +215,6 @@ export default function DiagramCanvas() {
       }
     });
 
-    // Draw shapes
     shapes.forEach(shape => {
       const isSelected = shape.id === selectedShape;
       
@@ -324,7 +310,6 @@ export default function DiagramCanvas() {
       }
     });
 
-    // Draw current freehand stroke
     if (currentFreehandPoints.length > 1) {
       ctx.strokeStyle = selectedColor;
       ctx.lineWidth = selectedStrokeWidth;
@@ -538,18 +523,17 @@ export default function DiagramCanvas() {
         let newWidth = resizeStart.width;
         let newHeight = resizeStart.height;
         
-        // Handle indices: 0=NW, 1=NE, 2=SW, 3=SE, 4=N, 5=S, 6=W, 7=E
-        if (handleIdx === 1 || handleIdx === 3 || handleIdx === 7) { // E
+        if (handleIdx === 1 || handleIdx === 3 || handleIdx === 7) {
           newWidth = Math.max(20, resizeStart.width + dx);
         }
-        if (handleIdx === 0 || handleIdx === 2 || handleIdx === 6) { // W
+        if (handleIdx === 0 || handleIdx === 2 || handleIdx === 6) {
           newWidth = Math.max(20, resizeStart.width - dx);
           newX = resizeStart.x + dx;
         }
-        if (handleIdx === 3 || handleIdx === 5 || handleIdx === 7) { // S
+        if (handleIdx === 3 || handleIdx === 5 || handleIdx === 7) {
           newHeight = Math.max(20, resizeStart.height + dy);
         }
-        if (handleIdx === 0 || handleIdx === 1 || handleIdx === 4) { // N
+        if (handleIdx === 0 || handleIdx === 1 || handleIdx === 4) {
           newHeight = Math.max(20, resizeStart.height - dy);
           newY = resizeStart.y + dy;
         }
