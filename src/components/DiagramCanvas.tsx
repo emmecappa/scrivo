@@ -1,5 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useStore } from '../store/useStore';
+import { db, isFirebaseConfigured } from '../lib/firebase';
+import { doc, setDoc } from 'firebase/firestore';
 import {
   MousePointer2,
   Square,
@@ -10,14 +12,9 @@ import {
   Trash2,
   ZoomIn,
   ZoomOut,
-  Undo,
-  Redo,
   Pencil,
   Eraser,
   Image as ImageIcon,
-  Upload,
-  Minus,
-  Plus,
   GripHorizontal,
 } from 'lucide-react';
 
@@ -36,13 +33,9 @@ interface DiagramShape {
   text: string;
   color: string;
   fillColor: string;
-  // For freehand drawings
   points?: Point[];
   strokeWidth?: number;
-  // For images
   imageUrl?: string;
-  // For resizing
-  rotation?: number;
 }
 
 interface Connection {
@@ -57,7 +50,7 @@ const COLORS = ['#3B82F6', '#EF4444', '#10B981', '#F59E0B', '#8B5CF6', '#EC4899'
 const STROKE_WIDTHS = [1, 2, 3, 5, 8, 12, 16];
 
 export default function DiagramCanvas() {
-  const { currentPageId, pages, updatePage } = useStore();
+  const { currentPageId, pages } = useStore();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [shapes, setShapes] = useState<DiagramShape[]>([]);
@@ -78,6 +71,7 @@ export default function DiagramCanvas() {
   const [resizeStart, setResizeStart] = useState({ x: 0, y: 0, width: 0, height: 0 });
   const [isPanning, setIsPanning] = useState(false);
   const [panStart, setPanStart] = useState({ x: 0, y: 0 });
+  const saveTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
 
   const currentPage = pages.find(p => p.id === currentPageId);
 
@@ -90,18 +84,43 @@ export default function DiagramCanvas() {
           const data = JSON.parse(diagramData);
           setShapes(data.shapes || []);
           setConnections(data.connections || []);
+          console.log('✅ Diagram loaded:', data.shapes?.length || 0, 'shapes');
         }
       } catch (e) {
-        // No diagram data
+        console.log('⚠️ No diagram data or parse error');
       }
     }
-  }, [currentPageId]);
+  }, [currentPageId, currentPage]);
 
-  // Save diagram data
+  // Save diagram data directly to Firestore
   const saveDiagram = useCallback((newShapes: DiagramShape[], newConnections: Connection[]) => {
-    if (!currentPageId) return;
-    const data = JSON.stringify({ shapes: newShapes, connections: newConnections });
-    updatePage(currentPageId, { diagram_data: data } as any);
+    if (!currentPageId || !isFirebaseConfigured || !db) {
+      console.error('❌ Cannot save: missing prerequisites');
+      return;
+    }
+
+    // Clear previous timeout
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+    }
+
+    // Debounce save (500ms)
+    saveTimeoutRef.current = setTimeout(async () => {
+      try {
+        const data = JSON.stringify({ shapes: newShapes, connections: newConnections });
+        console.log('💾 Saving diagram:', newShapes.length, 'shapes');
+        
+        const pageRef = doc(db, 'pages', currentPageId);
+        await setDoc(pageRef, { 
+          diagram_data: data,
+          updated_at: new Date().toISOString()
+        }, { merge: true });
+        
+        console.log('✅ Diagram saved successfully');
+      } catch (err) {
+        console.error('❌ Error saving diagram:', err);
+      }
+    }, 500);
   }, [currentPageId]);
 
   // Draw on canvas
@@ -121,7 +140,7 @@ export default function DiagramCanvas() {
     // Clear
     ctx.clearRect(0, 0, rect.width, rect.height);
     
-    // Background grid
+    // Save context and apply transformations
     ctx.save();
     ctx.translate(pan.x, pan.y);
     ctx.scale(zoom, zoom);
@@ -130,16 +149,21 @@ export default function DiagramCanvas() {
     ctx.strokeStyle = '#f0f0f0';
     ctx.lineWidth = 0.5;
     const gridSize = 20;
-    for (let x = -pan.x / zoom; x < (rect.width - pan.x) / zoom; x += gridSize) {
+    const startX = Math.floor(-pan.x / zoom / gridSize) * gridSize;
+    const startY = Math.floor(-pan.y / zoom / gridSize) * gridSize;
+    const endX = startX + (rect.width / zoom) + gridSize * 2;
+    const endY = startY + (rect.height / zoom) + gridSize * 2;
+    
+    for (let x = startX; x < endX; x += gridSize) {
       ctx.beginPath();
-      ctx.moveTo(x, -pan.y / zoom);
-      ctx.lineTo(x, (rect.height - pan.y) / zoom);
+      ctx.moveTo(x, startY);
+      ctx.lineTo(x, endY);
       ctx.stroke();
     }
-    for (let y = -pan.y / zoom; y < (rect.height - pan.y) / zoom; y += gridSize) {
+    for (let y = startY; y < endY; y += gridSize) {
       ctx.beginPath();
-      ctx.moveTo(-pan.x / zoom, y);
-      ctx.lineTo((rect.width - pan.x) / zoom, y);
+      ctx.moveTo(startX, y);
+      ctx.lineTo(endX, y);
       ctx.stroke();
     }
 
@@ -246,13 +270,6 @@ export default function DiagramCanvas() {
               ctx.lineTo(shape.points[i].x, shape.points[i].y);
             }
             ctx.stroke();
-            
-            // Update bounding box
-            const bounds = calculateBounds(shape.points);
-            shape.x = bounds.minX;
-            shape.y = bounds.minY;
-            shape.width = bounds.maxX - bounds.minX;
-            shape.height = bounds.maxY - bounds.minY;
           }
           break;
       }
@@ -337,6 +354,7 @@ export default function DiagramCanvas() {
     const canvas = canvasRef.current;
     if (!canvas) return { x: 0, y: 0 };
     const rect = canvas.getBoundingClientRect();
+    // Convert screen coordinates to canvas coordinates accounting for pan and zoom
     return {
       x: (e.clientX - rect.left - pan.x) / zoom,
       y: (e.clientY - rect.top - pan.y) / zoom,
@@ -348,7 +366,6 @@ export default function DiagramCanvas() {
       const shape = shapes[i];
       
       if (shape.type === 'freehand' && shape.points) {
-        // Check if point is near any line segment
         for (let j = 0; j < shape.points.length - 1; j++) {
           const p1 = shape.points[j];
           const p2 = shape.points[j + 1];
@@ -413,7 +430,6 @@ export default function DiagramCanvas() {
   const handleMouseDown = (e: React.MouseEvent) => {
     const coords = getCanvasCoords(e);
     
-    // Middle mouse button or space+click for panning
     if (e.button === 1 || (e.button === 0 && e.altKey)) {
       setIsPanning(true);
       setPanStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
@@ -423,7 +439,6 @@ export default function DiagramCanvas() {
     if (selectedTool === 'select') {
       const selectedShapeObj = selectedShape ? shapes.find(s => s.id === selectedShape) : null;
       
-      // Check if clicking on resize handle
       if (selectedShapeObj) {
         const handle = findResizeHandle(coords.x, coords.y, selectedShapeObj);
         if (handle) {
@@ -485,40 +500,46 @@ export default function DiagramCanvas() {
       const dx = coords.x - drawStart.x;
       const dy = coords.y - drawStart.y;
       
-      setShapes(prev => prev.map(s => {
-        if (s.id !== selectedShape) return s;
-        
-        let newX = resizeStart.x;
-        let newY = resizeStart.y;
-        let newWidth = resizeStart.width;
-        let newHeight = resizeStart.height;
-        
-        if (resizeHandle.includes('e')) {
-          newWidth = Math.max(20, resizeStart.width + dx);
-        }
-        if (resizeHandle.includes('w')) {
-          newWidth = Math.max(20, resizeStart.width - dx);
-          newX = resizeStart.x + dx;
-        }
-        if (resizeHandle.includes('s')) {
-          newHeight = Math.max(20, resizeStart.height + dy);
-        }
-        if (resizeHandle.includes('n')) {
-          newHeight = Math.max(20, resizeStart.height - dy);
-          newY = resizeStart.y + dy;
-        }
-        
-        return { ...s, x: newX, y: newY, width: newWidth, height: newHeight };
-      }));
+      setShapes(prev => {
+        const newShapes = prev.map(s => {
+          if (s.id !== selectedShape) return s;
+          
+          let newX = resizeStart.x;
+          let newY = resizeStart.y;
+          let newWidth = resizeStart.width;
+          let newHeight = resizeStart.height;
+          
+          if (resizeHandle.includes('e')) {
+            newWidth = Math.max(20, resizeStart.width + dx);
+          }
+          if (resizeHandle.includes('w')) {
+            newWidth = Math.max(20, resizeStart.width - dx);
+            newX = resizeStart.x + dx;
+          }
+          if (resizeHandle.includes('s')) {
+            newHeight = Math.max(20, resizeStart.height + dy);
+          }
+          if (resizeHandle.includes('n')) {
+            newHeight = Math.max(20, resizeStart.height - dy);
+            newY = resizeStart.y + dy;
+          }
+          
+          return { ...s, x: newX, y: newY, width: newWidth, height: newHeight };
+        });
+        return newShapes;
+      });
       return;
     }
     
     if (isDragging && selectedShape) {
-      setShapes(prev => prev.map(s => 
-        s.id === selectedShape 
-          ? { ...s, x: coords.x - dragOffset.x, y: coords.y - dragOffset.y }
-          : s
-      ));
+      setShapes(prev => {
+        const newShapes = prev.map(s => 
+          s.id === selectedShape 
+            ? { ...s, x: coords.x - dragOffset.x, y: coords.y - dragOffset.y }
+            : s
+        );
+        return newShapes;
+      });
     }
     
     if (isDrawing && selectedTool === 'pen') {
@@ -528,8 +549,10 @@ export default function DiagramCanvas() {
     if (isDrawing && selectedTool === 'eraser') {
       const shape = findShapeAt(coords.x, coords.y);
       if (shape) {
-        const newShapes = shapes.filter(s => s.id !== shape.id);
-        setShapes(newShapes);
+        setShapes(prev => {
+          const newShapes = prev.filter(s => s.id !== shape.id);
+          return newShapes;
+        });
         if (selectedShape === shape.id) {
           setSelectedShape(null);
         }
@@ -648,7 +671,6 @@ export default function DiagramCanvas() {
     };
     reader.readAsDataURL(file);
     
-    // Reset input
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -684,66 +706,33 @@ export default function DiagramCanvas() {
     <div className="flex-1 flex flex-col h-full bg-gray-50 overflow-hidden" onKeyDown={handleKeyDown} tabIndex={0}>
       {/* Toolbar */}
       <div className="border-b border-gray-200 px-4 py-2 flex items-center gap-2 bg-white flex-wrap">
-        <ToolButton
-          active={selectedTool === 'select'}
-          onClick={() => setSelectedTool('select')}
-          title="Seleziona (V)"
-        >
+        <ToolButton active={selectedTool === 'select'} onClick={() => setSelectedTool('select')} title="Seleziona (V)">
           <MousePointer2 className="w-4 h-4" />
         </ToolButton>
-        <ToolButton
-          active={selectedTool === 'rectangle'}
-          onClick={() => setSelectedTool('rectangle')}
-          title="Rettangolo (R)"
-        >
+        <ToolButton active={selectedTool === 'rectangle'} onClick={() => setSelectedTool('rectangle')} title="Rettangolo (R)">
           <Square className="w-4 h-4" />
         </ToolButton>
-        <ToolButton
-          active={selectedTool === 'circle'}
-          onClick={() => setSelectedTool('circle')}
-          title="Cerchio (C)"
-        >
+        <ToolButton active={selectedTool === 'circle'} onClick={() => setSelectedTool('circle')} title="Cerchio (C)">
           <Circle className="w-4 h-4" />
         </ToolButton>
-        <ToolButton
-          active={selectedTool === 'diamond'}
-          onClick={() => setSelectedTool('diamond')}
-          title="Rombo (D)"
-        >
+        <ToolButton active={selectedTool === 'diamond'} onClick={() => setSelectedTool('diamond')} title="Rombo (D)">
           <Diamond className="w-4 h-4" />
         </ToolButton>
-        <ToolButton
-          active={selectedTool === 'text'}
-          onClick={() => setSelectedTool('text')}
-          title="Testo (T)"
-        >
+        <ToolButton active={selectedTool === 'text'} onClick={() => setSelectedTool('text')} title="Testo (T)">
           <Type className="w-4 h-4" />
         </ToolButton>
-        <ToolButton
-          active={selectedTool === 'pen'}
-          onClick={() => setSelectedTool('pen')}
-          title="Matita (P)"
-        >
+        <ToolButton active={selectedTool === 'pen'} onClick={() => setSelectedTool('pen')} title="Matita (P)">
           <Pencil className="w-4 h-4" />
         </ToolButton>
-        <ToolButton
-          active={selectedTool === 'eraser'}
-          onClick={() => setSelectedTool('eraser')}
-          title="Gomma (E)"
-        >
+        <ToolButton active={selectedTool === 'eraser'} onClick={() => setSelectedTool('eraser')} title="Gomma (E)">
           <Eraser className="w-4 h-4" />
         </ToolButton>
-        <ToolButton
-          active={selectedTool === 'image'}
-          onClick={() => setSelectedTool('image')}
-          title="Immagine (I)"
-        >
+        <ToolButton active={selectedTool === 'image'} onClick={() => setSelectedTool('image')} title="Immagine (I)">
           <ImageIcon className="w-4 h-4" />
         </ToolButton>
 
         <div className="w-px h-6 bg-gray-200 mx-2" />
 
-        {/* Colors */}
         <div className="flex items-center gap-1">
           {COLORS.map(color => (
             <button
@@ -764,7 +753,6 @@ export default function DiagramCanvas() {
 
         <div className="w-px h-6 bg-gray-200 mx-2" />
 
-        {/* Stroke Width */}
         <div className="flex items-center gap-1">
           <span className="text-xs text-gray-500 mr-1">Spessore:</span>
           {STROKE_WIDTHS.map(width => (
@@ -811,7 +799,6 @@ export default function DiagramCanvas() {
         </ToolButton>
       </div>
 
-      {/* Hidden file input for images */}
       <input
         ref={fileInputRef}
         type="file"
@@ -820,7 +807,6 @@ export default function DiagramCanvas() {
         className="hidden"
       />
 
-      {/* Canvas */}
       <div className="flex-1 relative overflow-hidden">
         <canvas
           ref={canvasRef}
@@ -828,9 +814,7 @@ export default function DiagramCanvas() {
           style={{ 
             cursor: selectedTool === 'select' 
               ? (isDragging ? 'grabbing' : 'default')
-              : selectedTool === 'pen' 
-              ? 'crosshair'
-              : selectedTool === 'eraser'
+              : selectedTool === 'pen' || selectedTool === 'eraser'
               ? 'crosshair'
               : 'crosshair'
           }}
@@ -840,18 +824,13 @@ export default function DiagramCanvas() {
           onDoubleClick={handleDoubleClick}
         />
         
-        {/* Empty state */}
         {shapes.length === 0 && (
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
             <div className="text-center">
               <div className="text-4xl mb-3">🎨</div>
               <p className="text-gray-400 text-sm">Seleziona uno strumento e disegna sul canvas</p>
-              <p className="text-gray-300 text-xs mt-1">
-                Strumenti: Forme, Matita, Immagini, Testo
-              </p>
-              <p className="text-gray-300 text-xs mt-1">
-                Suggerimento: Alt+Click per spostare la vista
-              </p>
+              <p className="text-gray-300 text-xs mt-1">Strumenti: Forme, Matita, Immagini, Testo</p>
+              <p className="text-gray-300 text-xs mt-1">Suggerimento: Alt+Click per spostare la vista</p>
             </div>
           </div>
         )}
