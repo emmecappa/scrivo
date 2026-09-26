@@ -1,13 +1,12 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useStore } from '../store/useStore';
 import { db, isFirebaseConfigured } from '../lib/firebase';
-import { doc, setDoc } from 'firebase/firestore';
+import { doc, setDoc, onSnapshot, Unsubscribe } from 'firebase/firestore';
 import {
   MousePointer2,
   Square,
   Circle,
   Diamond,
-  ArrowRight,
   Type,
   Trash2,
   ZoomIn,
@@ -50,7 +49,7 @@ const COLORS = ['#3B82F6', '#EF4444', '#10B981', '#F59E0B', '#8B5CF6', '#EC4899'
 const STROKE_WIDTHS = [1, 2, 3, 5, 8, 12, 16];
 
 export default function DiagramCanvas() {
-  const { currentPageId, pages } = useStore();
+  const { currentPageId } = useStore();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [shapes, setShapes] = useState<DiagramShape[]>([]);
@@ -72,25 +71,51 @@ export default function DiagramCanvas() {
   const [isPanning, setIsPanning] = useState(false);
   const [panStart, setPanStart] = useState({ x: 0, y: 0 });
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
+  const unsubscribeRef = useRef<Unsubscribe | null>(null);
+  const isRemoteUpdateRef = useRef(false);
 
-  const currentPage = pages.find(p => p.id === currentPageId);
-
-  // Load diagram data from page
+  // Load diagram data with realtime listener
   useEffect(() => {
-    if (currentPage) {
-      try {
-        const diagramData = (currentPage as any).diagram_data;
-        if (diagramData) {
-          const data = JSON.parse(diagramData);
-          setShapes(data.shapes || []);
-          setConnections(data.connections || []);
-          console.log('✅ Diagram loaded:', data.shapes?.length || 0, 'shapes');
-        }
-      } catch (e) {
-        console.log('⚠️ No diagram data or parse error');
-      }
+    if (!currentPageId || !isFirebaseConfigured || !db) return;
+
+    console.log('🔄 Setting up realtime listener for page:', currentPageId);
+
+    // Cleanup previous listener
+    if (unsubscribeRef.current) {
+      unsubscribeRef.current();
     }
-  }, [currentPageId, currentPage]);
+
+    // Listen to page changes in realtime
+    unsubscribeRef.current = onSnapshot(
+      doc(db, 'pages', currentPageId),
+      (snapshot) => {
+        if (!snapshot.exists()) return;
+
+        const data = snapshot.data();
+        const diagramData = data.diagram_data as string;
+
+        if (diagramData && !isRemoteUpdateRef.current) {
+          try {
+            const parsed = JSON.parse(diagramData);
+            console.log('✅ Diagram loaded from Firestore:', parsed.shapes?.length || 0, 'shapes');
+            setShapes(parsed.shapes || []);
+            setConnections(parsed.connections || []);
+          } catch (e) {
+            console.error('❌ Error parsing diagram data:', e);
+          }
+        }
+      },
+      (error) => {
+        console.error('❌ Error listening to page:', error);
+      }
+    );
+
+    return () => {
+      if (unsubscribeRef.current) {
+        unsubscribeRef.current();
+      }
+    };
+  }, [currentPageId]);
 
   // Save diagram data directly to Firestore
   const saveDiagram = useCallback((newShapes: DiagramShape[], newConnections: Connection[]) => {
@@ -104,6 +129,9 @@ export default function DiagramCanvas() {
       clearTimeout(saveTimeoutRef.current);
     }
 
+    // Set flag to prevent remote update loop
+    isRemoteUpdateRef.current = true;
+
     // Debounce save (500ms)
     saveTimeoutRef.current = setTimeout(async () => {
       try {
@@ -112,13 +140,19 @@ export default function DiagramCanvas() {
         
         const pageRef = doc(db, 'pages', currentPageId);
         await setDoc(pageRef, { 
-          diagram_data: data,
+          diagram_ data,
           updated_at: new Date().toISOString()
         }, { merge: true });
         
         console.log('✅ Diagram saved successfully');
+        
+        // Reset flag after a short delay
+        setTimeout(() => {
+          isRemoteUpdateRef.current = false;
+        }, 100);
       } catch (err) {
         console.error('❌ Error saving diagram:', err);
+        isRemoteUpdateRef.current = false;
       }
     }, 500);
   }, [currentPageId]);
@@ -183,7 +217,6 @@ export default function DiagramCanvas() {
         ctx.lineTo(toCenter.x, toCenter.y);
         ctx.stroke();
         
-        // Arrow head
         const angle = Math.atan2(toCenter.y - fromCenter.y, toCenter.x - fromCenter.x);
         ctx.beginPath();
         ctx.moveTo(toCenter.x, toCenter.y);
@@ -276,7 +309,6 @@ export default function DiagramCanvas() {
 
       ctx.shadowBlur = 0;
 
-      // Draw text for shapes
       if (shape.text && shape.type !== 'text' && shape.type !== 'freehand' && shape.type !== 'image') {
         ctx.fillStyle = '#1F2937';
         ctx.font = `${Math.min(14, shape.width / 10)}px Inter, sans-serif`;
@@ -287,7 +319,6 @@ export default function DiagramCanvas() {
         ctx.textBaseline = 'alphabetic';
       }
 
-      // Draw selection box with resize handles
       if (isSelected) {
         drawSelectionBox(ctx, shape);
       }
@@ -317,17 +348,16 @@ export default function DiagramCanvas() {
     ctx.strokeRect(shape.x, shape.y, shape.width, shape.height);
     ctx.setLineDash([]);
     
-    // Draw resize handles
     const handleSize = 8;
     const handles = [
-      { pos: 'nw', x: shape.x, y: shape.y },
-      { pos: 'ne', x: shape.x + shape.width, y: shape.y },
-      { pos: 'sw', x: shape.x, y: shape.y + shape.height },
-      { pos: 'se', x: shape.x + shape.width, y: shape.y + shape.height },
-      { pos: 'n', x: shape.x + shape.width / 2, y: shape.y },
-      { pos: 's', x: shape.x + shape.width / 2, y: shape.y + shape.height },
-      { pos: 'w', x: shape.x, y: shape.y + shape.height / 2 },
-      { pos: 'e', x: shape.x + shape.width, y: shape.y + shape.height / 2 },
+      { x: shape.x, y: shape.y },
+      { x: shape.x + shape.width, y: shape.y },
+      { x: shape.x, y: shape.y + shape.height },
+      { x: shape.x + shape.width, y: shape.y + shape.height },
+      { x: shape.x + shape.width / 2, y: shape.y },
+      { x: shape.x + shape.width / 2, y: shape.y + shape.height },
+      { x: shape.x, y: shape.y + shape.height / 2 },
+      { x: shape.x + shape.width, y: shape.y + shape.height / 2 },
     ];
     
     handles.forEach(handle => {
@@ -354,7 +384,6 @@ export default function DiagramCanvas() {
     const canvas = canvasRef.current;
     if (!canvas) return { x: 0, y: 0 };
     const rect = canvas.getBoundingClientRect();
-    // Convert screen coordinates to canvas coordinates accounting for pan and zoom
     return {
       x: (e.clientX - rect.left - pan.x) / zoom,
       y: (e.clientY - rect.top - pan.y) / zoom,
@@ -381,25 +410,25 @@ export default function DiagramCanvas() {
     return null;
   };
 
-  const findResizeHandle = (x: number, y: number, shape: DiagramShape): string | null => {
+  const findResizeHandle = (x: number, y: number, shape: DiagramShape): number => {
     const handleSize = 10;
     const handles = [
-      { pos: 'nw', x: shape.x, y: shape.y },
-      { pos: 'ne', x: shape.x + shape.width, y: shape.y },
-      { pos: 'sw', x: shape.x, y: shape.y + shape.height },
-      { pos: 'se', x: shape.x + shape.width, y: shape.y + shape.height },
-      { pos: 'n', x: shape.x + shape.width / 2, y: shape.y },
-      { pos: 's', x: shape.x + shape.width / 2, y: shape.y + shape.height },
-      { pos: 'w', x: shape.x, y: shape.y + shape.height / 2 },
-      { pos: 'e', x: shape.x + shape.width, y: shape.y + shape.height / 2 },
+      { x: shape.x, y: shape.y },
+      { x: shape.x + shape.width, y: shape.y },
+      { x: shape.x, y: shape.y + shape.height },
+      { x: shape.x + shape.width, y: shape.y + shape.height },
+      { x: shape.x + shape.width / 2, y: shape.y },
+      { x: shape.x + shape.width / 2, y: shape.y + shape.height },
+      { x: shape.x, y: shape.y + shape.height / 2 },
+      { x: shape.x + shape.width, y: shape.y + shape.height / 2 },
     ];
     
-    for (const handle of handles) {
-      if (Math.abs(x - handle.x) < handleSize && Math.abs(y - handle.y) < handleSize) {
-        return handle.pos;
+    for (let i = 0; i < handles.length; i++) {
+      if (Math.abs(x - handles[i].x) < handleSize && Math.abs(y - handles[i].y) < handleSize) {
+        return i;
       }
     }
-    return null;
+    return -1;
   };
 
   const distanceToLine = (px: number, py: number, x1: number, y1: number, x2: number, y2: number) => {
@@ -440,10 +469,10 @@ export default function DiagramCanvas() {
       const selectedShapeObj = selectedShape ? shapes.find(s => s.id === selectedShape) : null;
       
       if (selectedShapeObj) {
-        const handle = findResizeHandle(coords.x, coords.y, selectedShapeObj);
-        if (handle) {
+        const handleIndex = findResizeHandle(coords.x, coords.y, selectedShapeObj);
+        if (handleIndex >= 0) {
           setIsResizing(true);
-          setResizeHandle(handle);
+          setResizeHandle(handleIndex.toString());
           setResizeStart({
             x: selectedShapeObj.x,
             y: selectedShapeObj.y,
@@ -496,50 +525,49 @@ export default function DiagramCanvas() {
       return;
     }
     
-    if (isResizing && selectedShape && resizeHandle) {
+    if (isResizing && selectedShape && resizeHandle !== null) {
       const dx = coords.x - drawStart.x;
       const dy = coords.y - drawStart.y;
+      const handleIdx = parseInt(resizeHandle);
       
-      setShapes(prev => {
-        const newShapes = prev.map(s => {
-          if (s.id !== selectedShape) return s;
-          
-          let newX = resizeStart.x;
-          let newY = resizeStart.y;
-          let newWidth = resizeStart.width;
-          let newHeight = resizeStart.height;
-          
-          if (resizeHandle.includes('e')) {
-            newWidth = Math.max(20, resizeStart.width + dx);
-          }
-          if (resizeHandle.includes('w')) {
-            newWidth = Math.max(20, resizeStart.width - dx);
-            newX = resizeStart.x + dx;
-          }
-          if (resizeHandle.includes('s')) {
-            newHeight = Math.max(20, resizeStart.height + dy);
-          }
-          if (resizeHandle.includes('n')) {
-            newHeight = Math.max(20, resizeStart.height - dy);
-            newY = resizeStart.y + dy;
-          }
-          
-          return { ...s, x: newX, y: newY, width: newWidth, height: newHeight };
-        });
-        return newShapes;
+      const newShapes = shapes.map(s => {
+        if (s.id !== selectedShape) return s;
+        
+        let newX = resizeStart.x;
+        let newY = resizeStart.y;
+        let newWidth = resizeStart.width;
+        let newHeight = resizeStart.height;
+        
+        // Handle indices: 0=NW, 1=NE, 2=SW, 3=SE, 4=N, 5=S, 6=W, 7=E
+        if (handleIdx === 1 || handleIdx === 3 || handleIdx === 7) { // E
+          newWidth = Math.max(20, resizeStart.width + dx);
+        }
+        if (handleIdx === 0 || handleIdx === 2 || handleIdx === 6) { // W
+          newWidth = Math.max(20, resizeStart.width - dx);
+          newX = resizeStart.x + dx;
+        }
+        if (handleIdx === 3 || handleIdx === 5 || handleIdx === 7) { // S
+          newHeight = Math.max(20, resizeStart.height + dy);
+        }
+        if (handleIdx === 0 || handleIdx === 1 || handleIdx === 4) { // N
+          newHeight = Math.max(20, resizeStart.height - dy);
+          newY = resizeStart.y + dy;
+        }
+        
+        return { ...s, x: newX, y: newY, width: newWidth, height: newHeight };
       });
+      
+      setShapes(newShapes);
       return;
     }
     
     if (isDragging && selectedShape) {
-      setShapes(prev => {
-        const newShapes = prev.map(s => 
-          s.id === selectedShape 
-            ? { ...s, x: coords.x - dragOffset.x, y: coords.y - dragOffset.y }
-            : s
-        );
-        return newShapes;
-      });
+      const newShapes = shapes.map(s => 
+        s.id === selectedShape 
+          ? { ...s, x: coords.x - dragOffset.x, y: coords.y - dragOffset.y }
+          : s
+      );
+      setShapes(newShapes);
     }
     
     if (isDrawing && selectedTool === 'pen') {
@@ -549,10 +577,8 @@ export default function DiagramCanvas() {
     if (isDrawing && selectedTool === 'eraser') {
       const shape = findShapeAt(coords.x, coords.y);
       if (shape) {
-        setShapes(prev => {
-          const newShapes = prev.filter(s => s.id !== shape.id);
-          return newShapes;
-        });
+        const newShapes = shapes.filter(s => s.id !== shape.id);
+        setShapes(newShapes);
         if (selectedShape === shape.id) {
           setSelectedShape(null);
         }
@@ -704,7 +730,6 @@ export default function DiagramCanvas() {
 
   return (
     <div className="flex-1 flex flex-col h-full bg-gray-50 overflow-hidden" onKeyDown={handleKeyDown} tabIndex={0}>
-      {/* Toolbar */}
       <div className="border-b border-gray-200 px-4 py-2 flex items-center gap-2 bg-white flex-wrap">
         <ToolButton active={selectedTool === 'select'} onClick={() => setSelectedTool('select')} title="Seleziona (V)">
           <MousePointer2 className="w-4 h-4" />
@@ -814,8 +839,6 @@ export default function DiagramCanvas() {
           style={{ 
             cursor: selectedTool === 'select' 
               ? (isDragging ? 'grabbing' : 'default')
-              : selectedTool === 'pen' || selectedTool === 'eraser'
-              ? 'crosshair'
               : 'crosshair'
           }}
           onMouseDown={handleMouseDown}
@@ -829,8 +852,6 @@ export default function DiagramCanvas() {
             <div className="text-center">
               <div className="text-4xl mb-3">🎨</div>
               <p className="text-gray-400 text-sm">Seleziona uno strumento e disegna sul canvas</p>
-              <p className="text-gray-300 text-xs mt-1">Strumenti: Forme, Matita, Immagini, Testo</p>
-              <p className="text-gray-300 text-xs mt-1">Suggerimento: Alt+Click per spostare la vista</p>
             </div>
           </div>
         )}
