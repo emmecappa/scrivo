@@ -217,11 +217,16 @@ UTENTE B vede le modifiche in tempo reale
 - Liste (puntate, numerate, task)
 - Codice, citazioni, link, immagini
 
-### 5. Canvas Diagrammi
+### 5. Canvas Diagrammi Avanzato
 - Forme (rettangoli, cerchi, rombi)
 - Frecce e connessioni
-- Colori personalizzabili
-- Testo nelle forme
+- **Disegno a mano libera** (matita/penna)
+- **Immagini** (upload e ridimensionamento)
+- **Ridimensionamento** di tutti gli oggetti (8 maniglie)
+- **Controllo spessore** tratto (7 livelli)
+- Gomma per cancellare
+- 10 colori personalizzabili
+- Scorciatoie da tastiera
 
 ### 6. Pagine Nidificate
 - Struttura ad albero
